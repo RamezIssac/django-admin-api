@@ -66,6 +66,21 @@ class ApiAdminMixin:
             return resolve(self, "inlines", request, obj)
         return super().get_inlines(request, obj)
 
+    def get_actions(self, request, action_location=None):
+        if _is_api(request) and not is_resolving(request, "actions"):
+            method = getattr(self, "get_api_actions", None)
+            if method is not None:
+                with resolving(request, "actions"):
+                    return method(request)
+            api_actions = getattr(self, "api_actions", None)
+            if api_actions is not None:
+                base = [a for a in (self.get_action(name) for name in api_actions) if a]
+                allowed = self._filter_actions_by_permissions(request, base)
+                return {getattr(action, "name", None) or action[1]: action for action in allowed}
+        if action_location is None:
+            return super().get_actions(request)
+        return super().get_actions(request, action_location=action_location)
+
     def get_form(self, request, obj=None, change=False, **kwargs):
         if _is_api(request) and not is_resolving(request, "form"):
             method = getattr(self, "get_api_form", None)

@@ -106,12 +106,23 @@ class ChangeListView(ModelApiView):
         return f"{request.path}?{query.urlencode()}"
 
 
+class ActionView(ModelApiView):
+    """``POST /v1/<app>/<model>/actions/<name>/``"""
+
+    def post(self, request, app_label, model_name, action_name):
+        from ..actions import run_action
+
+        model_admin = self.get_model_admin(request, app_label, model_name)
+        return JsonResponse(run_action(model_admin, request, action_name))
+
+
 class SchemaView(ModelApiView):
     """``GET /v1/<app>/<model>/schema/`` — what the list endpoint accepts and returns."""
 
     def get(self, request, app_label, model_name):
         from django.contrib.admin.views.main import ALL_VAR, ORDER_VAR, PAGE_VAR, SEARCH_VAR
 
+        from ..actions import describe_actions
         from ..writes import describe_form
 
         model_admin = self.get_model_admin(request, app_label, model_name)
@@ -153,5 +164,6 @@ class SchemaView(ModelApiView):
                 },
                 "shapes": {"param": SHAPE_PARAM, "values": list(SHAPES), "default": "objects"},
                 "form": describe_form(model_admin, request) if model_admin.has_add_permission(request) else None,
+                "actions": describe_actions(model_admin, request),
             }
         )

@@ -74,6 +74,28 @@ class SalesAdmin(admin.ModelAdmin):  # plain admin, no mixin
     date_hierarchy = "date"
     ordering = ["slug"]
     api_list_per_page = 2
+    actions = ["mark_posted", "export_csv", "boom"]
+
+    @admin.action(description="Mark as posted", permissions=["change"])
+    def mark_posted(self, request, queryset):
+        updated = queryset.update(status="posted")
+        self.message_user(request, f"{updated} posted.")
+
+    @admin.action(description="Export CSV")
+    def export_csv(self, request, queryset):
+        from django.http import HttpResponse
+
+        queryset.update(status="draft")  # side effect that must be rolled back
+        return HttpResponse("slug\n", content_type="text/csv")
+
+    def api_export_csv(self, request, queryset):
+        return {"rows": [{"slug": s.slug} for s in queryset.order_by("slug")]}
+
+    @admin.action(description="Not allowed")
+    def boom(self, request, queryset):
+        from django.core.exceptions import PermissionDenied
+
+        raise PermissionDenied("nope")
 
     @admin.display(description="Badge")  # HTML, not marked -> hidden from the API
     def badge(self, obj):

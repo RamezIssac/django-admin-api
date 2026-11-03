@@ -33,7 +33,7 @@ api_site = AdminApiSite(admin_site=admin.site)
 urlpatterns += [path("api/", api_site.urls)]  # → /api/v1/
 ```
 
-Status: prototype, milestone 4 of 8.
+Status: prototype, milestone 6 of 8.
 
 | Endpoint | |
 |---|---|
@@ -45,6 +45,7 @@ Status: prototype, milestone 4 of 8.
 | `PATCH`/`PUT /api/v1/<app>/<model>/<pk>/` | update; `{"inlines": {"items": [{"pk": 1, "quantity": 2}, {"pk": 2, "_delete": true}, {...new}]}}` |
 | `DELETE /api/v1/<app>/<model>/<pk>/` | `delete_model` + LogEntry; 409 when protected |
 | `GET /api/v1/<app>/<model>/<pk>/delete-preview/` | the admin's delete confirmation data as JSON |
+| `POST /api/v1/<app>/<model>/actions/<name>/` | run an admin action on `{"pks": [...]}` or `{"all": true}` (+ filters); `api_<name>` twin for actions that return files/pages |
 Design: [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Development

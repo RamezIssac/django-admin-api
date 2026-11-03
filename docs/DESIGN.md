@@ -398,19 +398,26 @@ PATCH /api/v1/store/sales/7/
 
 ---
 
-## 7. Actions (decision 13)
+## 7. Actions (decision 13), as built
 
-`POST /api/v1/<app>/<model>/actions/<name>/` with body `{"pks": [1, 2, 3]}` or `{"all": true}`
-(`all` honours the same list filters passed as query params).
+`POST /api/v1/<app>/<model>/actions/<name>/` with body `{"pks": [1, 2, 3]}` or `{"all": true}`.
+`all` honours the changelist filters passed as query params, e.g. `…/actions/post/?status__exact=draft`.
 
 - The action set comes from `get_api_actions(request)` → `api_actions` → `get_actions(request)`.
-  Permissions come through `allowed_permissions`, exactly as in the admin.
-- Messages sent with `message_user` during the action are captured, with a per-request message
-  store, and returned as `{"messages": [{"level": "success", "text": "…"}]}`.
-- An action that returns an `HttpResponse` (file export, confirmation page) is **not exposed**
-  unless it has an API version: `api_<action_name>(modeladmin, request, queryset)` returning a
-  dict, or one decorated with `@admin_api.action`. These actions are listed under `hidden` in
-  `/schema/` with a reason.
+  Permissions come through `allowed_permissions`, exactly as in the admin. An unknown or
+  forbidden action returns 404.
+- The queryset is the API changelist's (`get_api_queryset` + filters) narrowed to `pks`.
+- The action receives a POST request with `action`, `_selected_action`/`select_across` and
+  `post=yes`, so confirmation-style actions such as `delete_selected` complete.
+- `message_user` output is captured in memory and returned:
+  `{"action", "count", "messages": [{"level", "text"}], "result"}`.
+- **HttpResponse actions** (exports, intermediate pages): the action runs in a transaction. If it
+  returns an `HttpResponse`, the transaction is rolled back and `400 action_not_supported` is
+  returned. To expose such an action, define its **API twin**
+  `api_<action_name>(self, request, queryset)` returning JSON-serializable data, which becomes
+  `"result"`.
+- `PermissionDenied` raised inside an action → 403.
+- `/schema/` lists the available actions with `api_twin: true|false`.
 
 ## 8. Delete (decision R5)
 

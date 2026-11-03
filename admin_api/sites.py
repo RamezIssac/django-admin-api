@@ -110,7 +110,7 @@ class AdminApiSite:
         return inner
 
     def get_urls(self):
-        from .views.changelist import ChangeListView, SchemaView
+        from .views.changelist import ActionView, ChangeListView, SchemaView
         from .views.detail import DeletePreviewView, ObjectView
         from .views.registry import RegistryView
 
@@ -124,6 +124,11 @@ class AdminApiSite:
                 name="changelist",
             ),
             path(f"{model}schema/", self.api_view(SchemaView.as_view(api_site=self)), name="schema"),
+            path(
+                f"{model}actions/<str:action_name>/",
+                self.api_view(ActionView.as_view(api_site=self), methods=("POST",)),
+                name="action",
+            ),
             path(
                 f"{model}<str:object_id>/",
                 self.api_view(ObjectView.as_view(api_site=self), methods=("GET", "PATCH", "PUT", "DELETE")),
