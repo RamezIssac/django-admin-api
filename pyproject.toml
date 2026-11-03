@@ -1,0 +1,39 @@
+[project]
+# NOTE: "django-admin-api" is already taken on PyPI; final distribution name TBD.
+name = "django-admin-api"
+version = "0.0.1"
+description = "A thin layer that makes Django ModelAdmin API-ready (and later MCP-ready), driven by api_ twins."
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "Ramez Ashraf" }]
+requires-python = ">=3.10"
+dependencies = ["django>=4.2"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Framework :: Django",
+    "Framework :: Django :: 4.2",
+    "Framework :: Django :: 5.2",
+    "Programming Language :: Python :: 3 :: Only",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["admin_api"]
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-django>=4.8"]
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "tests.settings"
+python_files = ["test_*.py"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 120
+extend-exclude = ["**/migrations/**"]
+
+[tool.ruff.lint]
+extend-ignore = ["RUF012"]  # Django declares list_display etc. as mutable class attributes

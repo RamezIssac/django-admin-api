@@ -1,0 +1,79 @@
+from __future__ import annotations
+
+from .resolver import is_resolving, resolve, resolving
+
+
+def _is_api(request) -> bool:
+    return bool(getattr(request, "is_api", False))
+
+
+class ApiAdminMixin:
+    """Routes Django's normal ``get_X`` getters to their ``api_`` twin when ``request.is_api``.
+
+    Because Django's getters call each other (``get_form`` → ``get_fieldsets`` →
+    ``get_fields``; ``get_readonly_fields`` decides exclusions), routing *inside* the getters
+    makes every internal call API-aware.
+
+    If you override one of these getters on your admin, call ``super()`` to keep the routing.
+    """
+
+    api_enabled = True
+
+    # --- changelist-level ------------------------------------------------------------------
+    def get_list_display(self, request):
+        if _is_api(request) and not is_resolving(request, "list_display"):
+            return resolve(self, "list_display", request)
+        return super().get_list_display(request)
+
+    def get_list_filter(self, request):
+        if _is_api(request) and not is_resolving(request, "list_filter"):
+            return resolve(self, "list_filter", request)
+        return super().get_list_filter(request)
+
+    def get_search_fields(self, request):
+        if _is_api(request) and not is_resolving(request, "search_fields"):
+            return resolve(self, "search_fields", request)
+        return super().get_search_fields(request)
+
+    def get_ordering(self, request):
+        if _is_api(request) and not is_resolving(request, "ordering"):
+            return resolve(self, "ordering", request)
+        return super().get_ordering(request)
+
+    def get_queryset(self, request):
+        if _is_api(request) and not is_resolving(request, "queryset"):
+            return resolve(self, "queryset", request)
+        return super().get_queryset(request)
+
+    # --- changeform-level ------------------------------------------------------------------
+    def get_fields(self, request, obj=None):
+        if _is_api(request) and not is_resolving(request, "fields"):
+            return resolve(self, "fields", request, obj)
+        return super().get_fields(request, obj)
+
+    def get_fieldsets(self, request, obj=None):
+        if _is_api(request) and not is_resolving(request, "fieldsets"):
+            return resolve(self, "fieldsets", request, obj)
+        return super().get_fieldsets(request, obj)
+
+    def get_readonly_fields(self, request, obj=None):
+        if _is_api(request) and not is_resolving(request, "readonly_fields"):
+            return resolve(self, "readonly_fields", request, obj)
+        return super().get_readonly_fields(request, obj)
+
+    def get_inlines(self, request, obj):
+        if _is_api(request) and not is_resolving(request, "inlines"):
+            return resolve(self, "inlines", request, obj)
+        return super().get_inlines(request, obj)
+
+    def get_form(self, request, obj=None, change=False, **kwargs):
+        if _is_api(request) and not is_resolving(request, "form"):
+            method = getattr(self, "get_api_form", None)
+            if method is not None:
+                with resolving(request, "form"):
+                    return method(request, obj, change, **kwargs)
+            api_form = getattr(self, "api_form", None)
+            if api_form is not None and "form" not in kwargs:
+                # api_form is a *base* form class, like ModelAdmin.form.
+                kwargs["form"] = api_form
+        return super().get_form(request, obj, change=change, **kwargs)
