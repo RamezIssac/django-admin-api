@@ -172,6 +172,20 @@ class TestSchema:
         assert body["search"]["enabled"] is True
         assert body["date_hierarchy"] == "date"
         assert body["pagination"]["per_page"] == 2
+        form = {f["name"]: f for f in body["form"]["fields"]}
+        assert form["client"] == {
+            "name": "client",
+            "label": "Client",
+            "required": True,
+            "type": "related",
+            "related_model": "testapp.client",
+        }
+        assert form["status"]["type"] == "choice" and form["status"]["choices"][0]["value"] == "draft"
+        assert form["tags"]["type"] == "related_many"
+        assert body["form"]["readonly"] == ["badge", "doubled"]
+        (items,) = body["form"]["inlines"]
+        assert items["prefix"] == "items" and items["model"] == "testapp.salesitem"
+        assert [f["name"] for f in items["fields"]] == ["product", "quantity", "price"]
 
     def test_schema_does_not_fetch_rows(self, api, data):
         with CaptureQueriesContext(connection) as ctx:

@@ -86,6 +86,17 @@ class ChangeListView(ModelApiView):
             payload["results"] = [dict(zip(keys, row)) for row in rows]
         return JsonResponse(payload)
 
+    def post(self, request, app_label, model_name):
+        from ..writes import parse_json_body, save_from_payload
+        from .detail import saved_response
+
+        model_admin = self.get_model_admin(request, app_label, model_name)
+        if not model_admin.has_add_permission(request):
+            raise PermissionDeniedError()
+        payload = parse_json_body(request)
+        result, messages = save_from_payload(model_admin, request, None, payload, change=False, partial=False)
+        return saved_response(model_admin, request, result, messages, status=201)
+
     @staticmethod
     def _page_url(request, page):
         from django.contrib.admin.views.main import PAGE_VAR
@@ -100,6 +111,8 @@ class SchemaView(ModelApiView):
 
     def get(self, request, app_label, model_name):
         from django.contrib.admin.views.main import ALL_VAR, ORDER_VAR, PAGE_VAR, SEARCH_VAR
+
+        from ..writes import describe_form
 
         model_admin = self.get_model_admin(request, app_label, model_name)
         split_api_params(request)
@@ -139,5 +152,6 @@ class SchemaView(ModelApiView):
                     "max_show_all": model_admin.list_max_show_all,
                 },
                 "shapes": {"param": SHAPE_PARAM, "values": list(SHAPES), "default": "objects"},
+                "form": describe_form(model_admin, request) if model_admin.has_add_permission(request) else None,
             }
         )

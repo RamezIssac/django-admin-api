@@ -287,72 +287,65 @@ through the inline's `get_queryset` and permission checks.
 
 ## 6. Write side
 
-### 6.1 The pipeline refactor (decision 11a)
+### 6.1 The pipeline refactor (decision 11a), as built
 
 Today erp_framework's hooks run only inside `EntityAdmin._changeform_view`, which also renders
-HTML. We extract the non-HTML part into a method that **both** surfaces call:
+HTML. We extract the non-HTML part into a method that **both** surfaces call.
+
+**Contract:** `process_changeform(self, request, obj, change) -> result`
+- `request` is a POST request. The form data is in `request.POST` / `request.FILES`, exactly
+  as the HTML change form submits it. For the API, this is a copy of the API request with
+  `method = "POST"` and the JSON translated into change-form POST data (§6.2).
+- `result` has attributes `valid`, `obj`, `form`, `formsets` and `change`
+  (`admin_api.writes.ChangeformResult`, or any object with those attributes).
+- The pipeline must not render or redirect. The caller does that: the HTML view renders the
+  page or redirects, and the API serializes the object or the errors.
+
+Because the API hands the pipeline a real POST request, every hook that reads
+`request.POST` (`_create_formsets`, `get_formset_kwargs`, `save_formset`) behaves exactly as
+in the HTML admin. No `data`/`files` arguments are needed.
+
+`admin_api.writes.default_process_changeform(model_admin, request, obj, change)` mirrors
+`ModelAdmin._changeform_view` minus rendering and is used when the admin defines no
+`process_changeform`. The mixin deliberately does **not** define `process_changeform`: the
+runtime subclass `(ApiAdminMixin, TheirAdmin)` must not shadow erp_framework's version.
+
+erp_framework's `EntityAdmin.process_changeform` adds its hooks:
 
 ```python
-@dataclass
-class ChangeformResult:
-    valid: bool
-    obj: Model | None
-    form: ModelForm
-    formsets: list[BaseFormSet]
-    change: bool
-
-
-class ApiAdminMixin:
-    def process_changeform(self, request, obj, data, files, change) -> ChangeformResult:
-        """Default: Django's own changeform logic, minus rendering."""
-        ModelForm = self.get_form(request, obj, change=change)
-        form = ModelForm(data, files, instance=obj)
-        valid = form.is_valid()
-        new_obj = self.save_form(request, form, change=change) if valid else form.instance
-        formsets, _ = self._create_formsets(request, new_obj, change=change)
-        if valid and all_valid(formsets):
-            self.save_model(request, new_obj, form, change)
-            self.save_related(request, form, formsets, change)
-            msg = self.construct_change_message(request, form, formsets, not change)
-            (self.log_change if change else self.log_addition)(request, new_obj, msg)
-            return ChangeformResult(True, new_obj, form, formsets, change)
-        return ChangeformResult(False, None, form, formsets, change)
-```
-
-`erp_framework.EntityAdmin` overrides it to add its hooks, and its `_changeform_view`
-calls it too:
-
-```python
-def process_changeform(self, request, obj, data, files, change):
-    ... form/formsets as above ...
-    valid = form_valid and all_valid(formsets) \
-            and self.whole_changeform_validation(request, form, formsets, change)
+def process_changeform(self, request, obj, change):
+    ModelForm = self.get_form(request, obj, change=change)
+    form = ModelForm(request.POST, request.FILES, instance=obj)
+    formsets, inline_instances = self._create_formsets(request, form.instance, change=change)
+    form_validated = form.is_valid()
+    new_object = self.save_form(request, form, change=change) if form_validated else form.instance
+    valid = all_valid(formsets) and form_validated and \
+        self.whole_changeform_validation(request, form, formsets, change)
     if valid:
         self.pre_save(form, formsets, change)
-        ... save_model / save_related / log ...
-        self.post_save(request, new_obj, form, formsets, change)
+        self.save_model(...); self.save_related(...); log_addition/log_change
+        self.post_save(request, new_object, form, formsets, change)
         changeform_saved.send(...)
+    return ChangeformResult(valid, new_object if valid else None, form, formsets, change, ...)
 ```
-
-Admins **without** the mixin get the default pipeline via the resolver
-(`getattr(admin, "process_changeform", default_process_changeform)`).
-
-*Note:* with the `api_` twins, `get_form` is resolved through `get_api_form` when
-`request.is_api`. The mixin's `get_form` calls the resolver so `process_changeform`
-needs no API-specific branch.
 
 ### 6.2 Request handling around the pipeline
 
 ```
 parse JSON → reject unknown / readonly keys (400)
-→ build data: PATCH = initial(obj) merged with payload; POST/PUT = payload
-→ translate "inlines" block → formset POST data (§6.3)
+→ POST data: PATCH = current values (form initial) + payload; POST/PUT = add-form initial + payload
+→ "inlines" block → formset POST data (management form, row ids, DELETE)  (§6.3)
+→ post_request = copy(request) with method="POST", POST=data, in-memory message storage
 → with transaction.atomic():
-     with admin.create_revision(request) if VersionAdmin else nullcontext():
-         result = admin.process_changeform(request, obj, data, files, change)
-         if not result.valid: set_rollback(True)
-→ 201/200 with detail payload  |  400 validation_failed
+     with admin.create_revision(post_request) if VersionAdmin else nullcontext():
+         result = admin.process_changeform(post_request, obj, change)  # or the default
+     if not result.valid: set_rollback(True)
+→ 201/200 with detail payload (+ "messages" from message_user)  |  400 validation_failed | 409 conflict
 ```
+
+Messages raised with `message_user` / `messages.*` during an API write are captured in
+memory and returned in the response. They never reach the session, so they don't show up
+later in the HTML admin.
 
 **Reversion (decision 23):** `VersionAdmin` records revisions only by wrapping
 `add_view`/`change_view` in `self.create_revision(request)`, so the API must open that
@@ -377,7 +370,11 @@ PATCH /api/v1/store/sales/7/
 
 - The key is the formset **prefix** (`get_default_prefix()`), also listed in `/schema/`.
 - Translated into real formset data: `items-TOTAL_FORMS`, `items-INITIAL_FORMS`,
-  `items-N-id`, `items-N-DELETE`, … and the existing rows are loaded for partial PATCH.
+  `items-N-id`, `items-N-DELETE`, …
+- Row semantics (same for POST, PUT and PATCH): a row with `pk` updates that row, merged onto
+  its current values; `"_delete": true` deletes it. A row without `pk` creates a new row.
+  Existing rows that are **not mentioned are kept unchanged**: they are still submitted as
+  initial forms with their current values, so formset-level validation sees the whole set.
 - Inline permissions (`has_add/change/delete_permission` on the inline) are checked by the
   formset machinery, as in the HTML admin. `TransactionItemAdmin`'s overrides apply unchanged.
 - erp_framework's `PrepopulatedAdmin` initial-data logic is **not** applied on API writes
@@ -389,7 +386,8 @@ PATCH /api/v1/store/sales/7/
 400 {"error": "validation_failed",
      "fields": {"client": ["This field is required."]},
      "non_field_errors": ["Total does not match items."],
-     "inlines": {"items": [{}, {"quantity": ["Must be > 0"]}]}}
+     "inlines": {"items": {"rows": [{"index": 1, "pk": 41, "errors": {"quantity": ["…"]}}],
+                           "non_form_errors": []}}}
 401 {"error": "not_authenticated"}
 403 {"error": "permission_denied"}
 404 {"error": "not_found"}

@@ -1,4 +1,5 @@
-from django.contrib import admin
+from django import forms
+from django.contrib import admin, messages
 from django.utils.html import format_html
 
 import admin_api
@@ -53,8 +54,17 @@ class TagAdmin(admin.ModelAdmin):
     pass
 
 
+class SalesForm(forms.ModelForm):
+    def clean(self):
+        cleaned = super().clean()
+        if cleaned.get("slug") and not cleaned["slug"].startswith(("S-", "HIDDEN")):
+            raise forms.ValidationError("Slug must start with S-.")
+        return cleaned
+
+
 @admin.register(Sales, site=site)
 class SalesAdmin(admin.ModelAdmin):  # plain admin, no mixin
+    form = SalesForm
     inlines = [SalesItemInline]
     readonly_fields = ["badge", "doubled"]
     list_display = ["slug", "date", "client", "status", "value", "badge", "doubled"]
@@ -75,6 +85,19 @@ class SalesAdmin(admin.ModelAdmin):  # plain admin, no mixin
 
     def get_api_queryset(self, request):
         return super().get_queryset(request).exclude(slug="HIDDEN")
+
+    def save_model(self, request, obj, form, change):
+        obj.saved_via_api = request.is_api
+        super().save_model(request, obj, form, change)
+        messages.info(request, f"Saved {obj.slug}")
+
+    def save_related(self, request, form, formsets, change):
+        super().save_related(request, form, formsets, change)
+        sales = form.instance
+        total = sum(i.quantity * i.price for i in sales.items.all())
+        if sales.items.exists() and total != sales.value:
+            sales.value = total
+            sales.save(update_fields=["value"])
 
 
 @admin.register(Secret, site=site)

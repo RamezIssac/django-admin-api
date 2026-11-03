@@ -118,11 +118,15 @@ class AdminApiSite:
         model = f"{v}/<str:app_label>/<str:model_name>/"
         return [
             path(f"{v}/", self.api_view(RegistryView.as_view(api_site=self)), name="index"),
-            path(model, self.api_view(ChangeListView.as_view(api_site=self)), name="changelist"),
+            path(
+                model,
+                self.api_view(ChangeListView.as_view(api_site=self), methods=("GET", "POST")),
+                name="changelist",
+            ),
             path(f"{model}schema/", self.api_view(SchemaView.as_view(api_site=self)), name="schema"),
             path(
                 f"{model}<str:object_id>/",
-                self.api_view(ObjectView.as_view(api_site=self), methods=("GET", "DELETE")),
+                self.api_view(ObjectView.as_view(api_site=self), methods=("GET", "PATCH", "PUT", "DELETE")),
                 name="object",
             ),
             path(
