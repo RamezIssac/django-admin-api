@@ -7,7 +7,7 @@ from django.contrib import admin
 from django.urls import path
 from django.views.decorators.csrf import csrf_exempt
 
-from .auth import SessionAuthenticator
+from .auth import SessionAuthenticator, TokenAuthenticator
 from .errors import ApiError, MethodNotAllowed, NotAuthenticated, PermissionDeniedError
 from .mixins import ApiAdminMixin
 
@@ -26,19 +26,35 @@ class AdminApiSite:
     Subclass to change site-wide behaviour, like you would subclass ``AdminSite``.
     """
 
-    authenticators = [SessionAuthenticator]
+    authenticators = [TokenAuthenticator, SessionAuthenticator]
     version = "v1"
     max_page_size = 500
 
     def __init__(
-        self, admin_site: admin.AdminSite | None = None, *, name: str = "admin_api", version: str | None = None
+        self,
+        admin_site: admin.AdminSite | None = None,
+        *,
+        name: str = "admin_api",
+        version: str | None = None,
+        register_token_admin: bool = True,
     ):
         self.admin_site = admin_site or admin.site
         self.name = name
         self._api_admins: dict = {}
         if version is not None:
             self.version = version
+        if register_token_admin:
+            self.register_token_admin()
         _all_sites.add(self)
+
+    def register_token_admin(self):
+        """Register the API token admin on the wrapped admin site (once)."""
+        from .admin import ApiTokenAdmin
+        from .auth import get_token_model
+
+        model = get_token_model()
+        if not self.admin_site.is_registered(model):
+            self.admin_site.register(model, ApiTokenAdmin)
 
     # --- policy hooks -----------------------------------------------------------------------
     def is_exposed(self, model_admin) -> bool:

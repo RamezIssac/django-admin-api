@@ -33,7 +33,7 @@ api_site = AdminApiSite(admin_site=admin.site)
 urlpatterns += [path("api/", api_site.urls)]  # → /api/v1/
 ```
 
-Status: prototype, milestone 6 of 8.
+Status: prototype, milestone 7 of 8.
 
 | Endpoint | |
 |---|---|
@@ -47,6 +47,14 @@ Status: prototype, milestone 6 of 8.
 | `GET /api/v1/<app>/<model>/<pk>/delete-preview/` | the admin's delete confirmation data as JSON |
 | `POST /api/v1/<app>/<model>/actions/<name>/` | run an admin action on `{"pks": [...]}` or `{"all": true}` (+ filters); `api_<name>` twin for actions that return files/pages |
 Design: [docs/DESIGN.md](docs/DESIGN.md).
+
+## Authentication
+
+* **Session**: same login as the admin. CSRF is enforced on unsafe methods.
+* **Personal access tokens**: `Authorization: Bearer aapi_<prefix>_<secret>`. Create them in the
+  admin ("API tokens", registered on the wrapped site) or with
+  `manage.py create_api_token <username> --name ci`. Only a hash is stored. A token has exactly
+  the permissions of its user.
 
 ## Development
 

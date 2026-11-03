@@ -100,6 +100,7 @@ class TestIsApiFlag:
         assert seen["is_api"] is False
 
 
+@pytest.mark.django_db
 class TestChecks:
     @override_settings(MIDDLEWARE=[])
     def test_e001_missing_middleware(self):

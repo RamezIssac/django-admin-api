@@ -434,13 +434,16 @@ PATCH /api/v1/store/sales/7/
 
 ```python
 class AdminApiSite:
-    authenticators = [SessionAuthenticator, TokenAuthenticator]  # v1
+    authenticators = [TokenAuthenticator, SessionAuthenticator]  # v1, as built
     # later: OAuthAuthenticator (django-oauth-toolkit), added here, nothing else changes
 ```
 
-Each authenticator returns `(user, auth_info)` or `None`. Then `site.has_permission(request)`
-(is_active and is_staff by default, or the wrapped site's rule) is enforced.
-`SessionAuthenticator` enforces CSRF for unsafe methods. `TokenAuthenticator` does not need CSRF.
+Each authenticator returns a user, or `None` to let the next one try. Then
+`site.has_permission(request)` is enforced: the wrapped `AdminSite.has_permission`, i.e.
+is_active + is_staff by default, or erp_framework's rule.
+`SessionAuthenticator` enforces CSRF for unsafe methods. `TokenAuthenticator` does not
+(it isn't cookie based). A request that sends a Bearer token is **never** authenticated by the
+session: an invalid, revoked or expired token is `401 invalid_token`, not a fall-through.
 
 ### 9.2 `ApiToken`: built small, with room to grow
 
@@ -469,11 +472,19 @@ Header: `Authorization: Bearer aapi_<prefix>_<secret>`.
    and shown with their own admin filter.
 3. **OAuth 2.1** (with remote MCP): a separate authenticator backed by django-oauth-toolkit.
    `ApiToken` is untouched, and OAuth access tokens map to the same user and scopes model.
-4. **Swappable model:** `ADMIN_API_TOKEN_MODEL` setting with `AbstractApiToken` base, in case
-   a project needs extra columns (org, tenant).
+4. **Swappable model (built):** `ApiToken.Meta.swappable = "ADMIN_API_TOKEN_MODEL"` with an
+   `AbstractApiToken` base, in case a project needs extra columns (org, tenant).
 
-Token admin: an `ApiTokenAdmin` on the wrapped site. Users create and revoke their own tokens,
-and superusers manage all of them.
+**As built:**
+- `ApiToken.objects.create_token(user, name, expires_at=None, kind="pat")` returns
+  `(token, raw)`. Only `sha256(secret)` is stored, and lookup is by `prefix` with
+  `hmac.compare_digest`. `last_used_at` is updated at most once a minute.
+- `ApiTokenAdmin` is registered on the **wrapped** admin site by `AdminApiSite`
+  (`register_token_admin=True`), and never exposed through the API itself (`api_enabled = False`).
+  On add, the raw token is shown once in a warning message. Staff users see only their own
+  tokens, and a "Revoke selected tokens" action is provided.
+- `manage.py create_api_token <username> [--name] [--kind pat|mcp|service] [--expires-days N]`
+  prints a raw token (for CI or MCP clients).
 
 ---
 
