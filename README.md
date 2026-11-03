@@ -27,7 +27,13 @@ api_site = AdminApiSite(admin_site=admin.site)
 urlpatterns += [path("api/", api_site.urls)]  # → /api/v1/
 ```
 
-Status: prototype, milestone 1 of 8 (skeleton, resolver, session auth, registry endpoint).
+Status: prototype, milestone 2 of 8.
+
+| Endpoint | |
+|---|---|
+| `GET /api/v1/` | apps/models the user may use, with permissions |
+| `GET /api/v1/<app>/<model>/` | changelist: admin filters (`?status__exact=`), search `?q=`, ordering `?o=`, page `?p=`, `_per_page`, `_shape=columnar` |
+| `GET /api/v1/<app>/<model>/schema/` | columns, filters with their params, search, ordering, pagination |
 Design: [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Development

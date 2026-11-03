@@ -105,19 +105,3 @@ class TestChecks:
     def test_e001_missing_middleware(self):
         ids = [e.id for e in checks.run_checks()]
         assert "admin_api.E001" in ids
-
-    def test_w001_form_twins_without_mixin(self):
-        from django.contrib import admin
-
-        from admin_api import AdminApiSite
-        from tests.testapp.models import Secret
-
-        site = admin.AdminSite(name="w001")
-
-        class NoMixin(admin.ModelAdmin):
-            api_readonly_fields = ["name"]
-
-        site.register(Secret, NoMixin)
-        api = AdminApiSite(admin_site=site, name="w001api")  # noqa: F841  (kept alive for the check)
-        msgs = [e for e in checks.run_checks() if e.id == "admin_api.W001"]
-        assert any("NoMixin" in e.msg and "readonly_fields" in e.msg for e in msgs)

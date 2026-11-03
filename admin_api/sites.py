@@ -9,6 +9,7 @@ from django.views.decorators.csrf import csrf_exempt
 
 from .auth import SessionAuthenticator
 from .errors import ApiError, MethodNotAllowed, NotAuthenticated, PermissionDeniedError
+from .mixins import ApiAdminMixin
 
 _all_sites: WeakSet = WeakSet()
 
@@ -34,6 +35,7 @@ class AdminApiSite:
     ):
         self.admin_site = admin_site or admin.site
         self.name = name
+        self._api_admins: dict = {}
         if version is not None:
             self.version = version
         _all_sites.add(self)
@@ -53,19 +55,38 @@ class AdminApiSite:
                 return user
         raise NotAuthenticated()
 
+    def get_api_admin(self, model_admin):
+        """The admin instance the API uses.
+
+        Admins that already use ``ApiAdminMixin`` are used as-is. Others get a cached runtime
+        subclass ``(ApiAdminMixin, TheirAdmin)`` so that Django's internal getter calls
+        (ChangeList → get_queryset / get_search_results / get_ordering, get_form →
+        get_fieldsets, ...) see the api_ twins too. The mixin is therefore optional.
+        """
+        if isinstance(model_admin, ApiAdminMixin):
+            return model_admin
+        key = model_admin.model
+        cached = self._api_admins.get(key)
+        if cached is None or cached[0] is not model_admin:
+            cls = type(model_admin)
+            api_cls = type(f"Api{cls.__name__}", (ApiAdminMixin, cls), {"__module__": cls.__module__})
+            cached = (model_admin, api_cls(model_admin.model, model_admin.admin_site))
+            self._api_admins[key] = cached
+        return cached[1]
+
     def get_model_admin(self, app_label: str, model_name: str):
         for model, model_admin in self.admin_site._registry.items():
             opts = model._meta
             if opts.app_label == app_label and opts.model_name == model_name:
                 if self.is_exposed(model_admin):
-                    return model_admin
+                    return self.get_api_admin(model_admin)
                 break
         return None
 
     def exposed_admins(self):
         for model, model_admin in self.admin_site._registry.items():
             if self.is_exposed(model_admin):
-                yield model, model_admin
+                yield model, self.get_api_admin(model_admin)
 
     # --- view plumbing ----------------------------------------------------------------------
     def api_view(self, view, methods=("GET",)):
@@ -89,11 +110,15 @@ class AdminApiSite:
         return inner
 
     def get_urls(self):
+        from .views.changelist import ChangeListView, SchemaView
         from .views.registry import RegistryView
 
         v = self.version
+        model = f"{v}/<str:app_label>/<str:model_name>/"
         return [
             path(f"{v}/", self.api_view(RegistryView.as_view(api_site=self)), name="index"),
+            path(model, self.api_view(ChangeListView.as_view(api_site=self)), name="changelist"),
+            path(f"{model}schema/", self.api_view(SchemaView.as_view(api_site=self)), name="schema"),
         ]
 
     @property

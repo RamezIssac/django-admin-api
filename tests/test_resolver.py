@@ -46,10 +46,20 @@ class TestLookupOrder:
 
 class TestPlainAdmin:
     def test_api_value_resolves_twin(self, sales_admin, api_request):
-        assert api_value(sales_admin, "list_display", api_request) == ["slug", "value"]
+        assert api_value(sales_admin, "search_fields", api_request) == ["slug"]
 
     def test_html_unchanged(self, sales_admin, html_request):
-        assert sales_admin.get_list_display(html_request) == ["slug", "client", "value"]
+        assert sales_admin.get_search_fields(html_request) == ["slug", "client__name"]
+
+    def test_site_wraps_plain_admin_with_mixin(self, sales_admin, api_request, html_request):
+        from tests.urls import api_site
+
+        api_admin = api_site.get_api_admin(sales_admin)
+        assert isinstance(api_admin, ApiAdminMixin) and isinstance(api_admin, type(sales_admin))
+        assert api_site.get_api_admin(sales_admin) is api_admin  # cached
+        # Internal getter calls now see the twin:
+        assert api_admin.get_search_fields(api_request) == ["slug"]
+        assert api_admin.get_search_fields(html_request) == ["slug", "client__name"]
 
 
 class TestMixinRouting:

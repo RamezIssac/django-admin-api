@@ -33,9 +33,6 @@ ROUTED = frozenset(
     }
 )
 
-# Twins whose effect inside Django's form machinery requires the mixin (system check W001).
-MIXIN_REQUIRED = frozenset({"fields", "fieldsets", "readonly_fields", "form", "inlines"})
-
 _STACK_ATTR = "_admin_api_resolving"
 
 
@@ -96,14 +93,3 @@ def api_value(model_admin, name: str, request, *args, **kwargs) -> Any:
     if isinstance(model_admin, ApiAdminMixin) and name in ROUTED:
         return getattr(model_admin, f"get_{name}")(request, *args, **kwargs)
     return resolve(model_admin, name, request, *args, **kwargs)
-
-
-def defined_twins(model_admin) -> set[str]:
-    """Names of hooks for which the admin defines an ``api_X`` attribute or ``get_api_X`` method."""
-    names = set()
-    for attr in dir(type(model_admin)):
-        if attr.startswith("get_api_"):
-            names.add(attr[len("get_api_") :])
-        elif attr.startswith("api_") and getattr(model_admin, attr, None) is not None:
-            names.add(attr[len("api_") :])
-    return names

@@ -60,7 +60,7 @@ through real formsets in one transaction, and the error envelope shape.
 | Component | Responsibility |
 |---|---|
 | `AdminApiSite` | Wraps an existing `AdminSite`. Global config: authenticators, page-size cap, version, `has_permission`. Generates URLs. Like `ERPFrameworkAdminSite`, it can be subclassed to change global behaviour. |
-| `ApiAdminMixin` (optional) | Adds the default `get_api_*` methods and `process_changeform()` to a `ModelAdmin`. Admins **without** the mixin still work: the resolver uses `getattr` fallbacks. |
+| `ApiAdminMixin` (optional) | Routes Django's getters to the `api_` twins when `request.is_api`, and adds `process_changeform()`. Admins **without** the mixin get it at runtime: `AdminApiSite.get_api_admin()` builds a cached subclass `(ApiAdminMixin, TheirAdmin)` for the API. |
 | `resolver` | Single function implementing the twin lookup order (§3). |
 | `ApiChangeList` | Subclass of `django.contrib.admin.views.main.ChangeList`, built from resolved api_ twins. |
 | views | Plain Django function/class views returning `JsonResponse`. |
@@ -215,10 +215,14 @@ cl = ApiChangeList(
 **Query parameters use the admin format** (decision 8): filters as `?client__id__exact=2`,
 search as `?q=`, ordering as `?o=2.-1`, page as `?p=`, date hierarchy as `?date__year=2025`.
 
-**Reserved API parameters** start with `_` and are removed from `request.GET` before
-`ChangeList` sees them. `ChangeList` treats every unknown GET key as a lookup and raises
-`IncorrectLookupParameters` otherwise. v1 reserves `_per_page` (capped by the site) and
-`_shape` (see §5.3). `IncorrectLookupParameters` maps to `400 bad_lookup`.
+**Reserved API parameters** are an explicit set, `{_shape, _per_page}`. They are removed
+from `request.GET` before `ChangeList` sees it, because `ChangeList` treats every unknown GET
+key as a lookup. The prefix `_` alone can't be the rule: the admin owns `_facets`, `_popup`
+and `_to_field`. `_per_page` is capped by `AdminApiSite.max_page_size`.
+`IncorrectLookupParameters`, `SuspiciousOperation` and out-of-range pages map to `400 bad_lookup`.
+
+**Ordering** uses `?o=` with 0-based indexes into the API columns. Unmarked callables are
+removed *before* the `ChangeList` is built, so the indexes match `/schema/`'s `order_index`.
 
 ### 5.2 Response (decision 10: lean + `/schema/`)
 
@@ -524,7 +528,12 @@ and superusers manage all of them.
    silently ignored. Routing inside the getters makes every internal call API-aware, and
    `process_changeform` needs no API branch.
 
-   *Consequence:* the twins for form/fields/readonly/inlines **require `ApiAdminMixin`**.
-   Admins without the mixin are still exposed and still get the list-level twins, which the
-   API views resolve directly. System check `admin_api.W001` warns when an admin defines
-   `api_*` attributes that need the mixin but doesn't use it.
+   *Consequence (revised in milestone 2):* routing needs `ApiAdminMixin` in the MRO. Admins
+   without it get a cached runtime subclass `(ApiAdminMixin, TheirAdmin)` from
+   `AdminApiSite.get_api_admin()`, used only for API requests. All twins therefore work with
+   or without the mixin, and the planned system check W001 was dropped.
+
+   MRO note: with an explicit mixin (`class A(ApiAdminMixin, ModelAdmin)`), your own
+   `get_X` override sits *above* the mixin and wraps the twin's result when it calls `super()`.
+   With the runtime subclass, the mixin sits above your class, so a twin replaces your `get_X`
+   for API requests. Both follow the lookup order: a twin beats `get_X`.
