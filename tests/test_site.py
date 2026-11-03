@@ -28,7 +28,7 @@ class TestRegistry:
         status, body = get_json(client)
         assert status == 200 and body["version"] == "v1"
         models = {m["model"] for app in body["apps"] for m in app["models"]}
-        assert models == {"client", "sales"}  # Secret has api_enabled = False
+        assert models == {"client", "sales", "tag"}  # Secret has api_enabled = False
         entry = next(m for app in body["apps"] for m in app["models"] if m["model"] == "client")
         assert entry["url"] == "/api/v1/testapp/client/"
         assert entry["perms"] == {"add": True, "change": True, "delete": True, "view": True}

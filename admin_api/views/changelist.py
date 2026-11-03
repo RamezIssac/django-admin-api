@@ -30,6 +30,14 @@ class ModelApiView(View):
             raise PermissionDeniedError()
         return model_admin
 
+    def get_object(self, model_admin, request, object_id):
+        from django.contrib.admin.utils import unquote
+
+        obj = model_admin.get_object(request, unquote(object_id))
+        if obj is None:
+            raise NotFound(f"{model_admin.model._meta.verbose_name} with pk {object_id!r} does not exist.")
+        return obj
+
 
 class ChangeListView(ModelApiView):
     """``GET /v1/<app>/<model>/`` — Django's changelist as JSON."""

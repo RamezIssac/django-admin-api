@@ -19,7 +19,9 @@ def data(db):
     ahmed = Client.objects.create(name="Ahmed")
     bassem = Client.objects.create(name="Bassem")
     Sales.objects.create(slug="S-1", client=ahmed, value=Decimal(500), date=datetime.date(2025, 1, 5))
-    Sales.objects.create(slug="S-2", client=bassem, value=Decimal(1500), status="posted", date=datetime.date(2025, 2, 1))
+    Sales.objects.create(
+        slug="S-2", client=bassem, value=Decimal(1500), status="posted", date=datetime.date(2025, 2, 1)
+    )
     Sales.objects.create(slug="S-3", client=ahmed, value=Decimal(2000), status="posted", date=datetime.date(2024, 6, 1))
     Sales.objects.create(slug="HIDDEN", client=ahmed, value=Decimal(1))
     return {"ahmed": ahmed, "bassem": bassem}

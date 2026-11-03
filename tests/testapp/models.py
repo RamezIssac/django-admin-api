@@ -11,6 +11,13 @@ class Client(models.Model):
         return self.name
 
 
+class Tag(models.Model):
+    name = models.CharField(max_length=30)
+
+    def __str__(self):
+        return self.name
+
+
 class Sales(models.Model):
     STATUS = [("draft", "Draft"), ("posted", "Posted")]
 
@@ -19,9 +26,23 @@ class Sales(models.Model):
     client = models.ForeignKey(Client, on_delete=models.PROTECT)
     status = models.CharField(max_length=10, choices=STATUS, default="draft")
     value = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    tags = models.ManyToManyField(Tag, blank=True)
+
+    class Meta:
+        verbose_name_plural = "sales"
 
     def __str__(self):
         return self.slug
+
+
+class SalesItem(models.Model):
+    sales = models.ForeignKey(Sales, on_delete=models.CASCADE, related_name="items")
+    product = models.CharField(max_length=50)
+    quantity = models.PositiveIntegerField(default=1)
+    price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+
+    def __str__(self):
+        return f"{self.quantity} x {self.product}"
 
 
 class Secret(models.Model):

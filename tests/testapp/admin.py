@@ -3,7 +3,7 @@ from django.utils.html import format_html
 
 import admin_api
 
-from .models import Client, Sales, Secret
+from .models import Client, Sales, SalesItem, Secret, Tag
 
 site = admin.AdminSite(name="testadmin")
 
@@ -43,8 +43,20 @@ class ValueBandFilter(admin.SimpleListFilter):
         return queryset
 
 
+class SalesItemInline(admin.TabularInline):
+    model = SalesItem
+    extra = 0
+
+
+@admin.register(Tag, site=site)
+class TagAdmin(admin.ModelAdmin):
+    pass
+
+
 @admin.register(Sales, site=site)
 class SalesAdmin(admin.ModelAdmin):  # plain admin, no mixin
+    inlines = [SalesItemInline]
+    readonly_fields = ["badge", "doubled"]
     list_display = ["slug", "date", "client", "status", "value", "badge", "doubled"]
     list_filter = ["status", "client", ValueBandFilter]
     search_fields = ["slug", "client__name"]

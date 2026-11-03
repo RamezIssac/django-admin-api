@@ -27,13 +27,16 @@ api_site = AdminApiSite(admin_site=admin.site)
 urlpatterns += [path("api/", api_site.urls)]  # → /api/v1/
 ```
 
-Status: prototype, milestone 2 of 8.
+Status: prototype, milestone 3 of 8.
 
 | Endpoint | |
 |---|---|
 | `GET /api/v1/` | apps/models the user may use, with permissions |
 | `GET /api/v1/<app>/<model>/` | changelist: admin filters (`?status__exact=`), search `?q=`, ordering `?o=`, page `?p=`, `_per_page`, `_shape=columnar` |
 | `GET /api/v1/<app>/<model>/schema/` | columns, filters with their params, search, ordering, pagination |
+| `GET /api/v1/<app>/<model>/<pk>/` | detail: fieldsets (or `api_detail_fields`) + inlines |
+| `DELETE /api/v1/<app>/<model>/<pk>/` | `delete_model` + LogEntry; 409 when protected |
+| `GET /api/v1/<app>/<model>/<pk>/delete-preview/` | the admin's delete confirmation data as JSON |
 Design: [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Development

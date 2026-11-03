@@ -111,6 +111,7 @@ class AdminApiSite:
 
     def get_urls(self):
         from .views.changelist import ChangeListView, SchemaView
+        from .views.detail import DeletePreviewView, ObjectView
         from .views.registry import RegistryView
 
         v = self.version
@@ -119,6 +120,16 @@ class AdminApiSite:
             path(f"{v}/", self.api_view(RegistryView.as_view(api_site=self)), name="index"),
             path(model, self.api_view(ChangeListView.as_view(api_site=self)), name="changelist"),
             path(f"{model}schema/", self.api_view(SchemaView.as_view(api_site=self)), name="schema"),
+            path(
+                f"{model}<str:object_id>/",
+                self.api_view(ObjectView.as_view(api_site=self), methods=("GET", "DELETE")),
+                name="object",
+            ),
+            path(
+                f"{model}<str:object_id>/delete-preview/",
+                self.api_view(DeletePreviewView.as_view(api_site=self)),
+                name="delete_preview",
+            ),
         ]
 
     @property
