@@ -526,7 +526,7 @@ Header: `Authorization: Bearer aapi_<prefix>_<secret>`.
    test against ra_erp (polymorphic `Sales` + `ItemMovementItem` inline):
    `examples/ra_erp_smoke/`.
 
-**Status: all 8 done.** Commits: django-admin-api `042ddc7…`; django-erp-framework `e1a9766`
+**Status: all 8 done.** Commits: django-admin-api `a67d75c…`; django-erp-framework `e1a9766`
 (process_changeform refactor) and `259c3f7` (`erp_framework.api`).
 
 ### Next (not in the prototype)
