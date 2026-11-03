@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import datetime
+
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db import models
 from django.db.models.fields.files import FieldFile
+from django.utils import timezone
 
 _encoder = DjangoJSONEncoder()
 
@@ -20,6 +23,10 @@ def encode_value(value):
         return [encode_value(v) for v in value]
     if isinstance(value, dict):
         return {str(k): encode_value(v) for k, v in value.items()}
+    if isinstance(value, datetime.datetime) and timezone.is_aware(value):
+        # One representation everywhere (list, detail, after save): the current time zone,
+        # like the admin displays it.
+        value = timezone.localtime(value)
     try:
         # datetime/date/time (ISO 8601), timedelta, Decimal, UUID, lazy translation strings
         return _encoder.default(value)

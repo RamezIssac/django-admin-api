@@ -33,7 +33,21 @@ api_site = AdminApiSite(admin_site=admin.site)
 urlpatterns += [path("api/", api_site.urls)]  # → /api/v1/
 ```
 
-Status: prototype, milestone 7 of 8.
+Status: **working prototype** (all 8 milestones). Tested on Django 4.2, 5.2 and 6.1.
+The mixin is optional: admins without it are wrapped at runtime for API requests.
+
+### With erp_framework
+
+```python
+# urls.py, after INSTALLED_APPS/MIDDLEWARE as above
+from erp_framework.api import erp_api_site
+
+urlpatterns += [path("api/", erp_api_site.urls)]
+```
+
+ERP writes run `EntityAdmin.process_changeform`, the same pipeline as the HTML change form.
+`examples/ra_erp_smoke/` exercises a full create/update/delete of a ra_erp `Sales` with item
+lines.
 
 | Endpoint | |
 |---|---|

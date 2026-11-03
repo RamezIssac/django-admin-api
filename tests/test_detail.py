@@ -129,3 +129,19 @@ class TestDelete:
         c.force_login(superuser)
         resp = c.delete(url(sale))
         assert resp.status_code == 403 and json.loads(resp.content)["error"] == "csrf_failed"
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("tz", ["UTC", "America/Chicago"])
+def test_datetimes_use_current_timezone_everywhere(settings, tz):
+    import datetime
+
+    from django.utils import timezone
+
+    from admin_api.encoders import encode_value
+
+    settings.TIME_ZONE = tz
+    utc = datetime.datetime(2025, 4, 1, 9, 0, tzinfo=datetime.timezone.utc)
+    with timezone.override(tz):
+        local = timezone.localtime(utc)
+        assert encode_value(utc) == encode_value(local)

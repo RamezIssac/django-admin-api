@@ -522,7 +522,21 @@ Header: `Authorization: Bearer aapi_<prefix>_<secret>`.
 5. erp_framework refactor: `EntityAdmin.process_changeform`, with `_changeform_view` calling it.
 6. Actions with message capture.
 7. `ApiToken` + `TokenAuthenticator` + token admin.
-8. Demo against `my-shop` (optional, later).
+8. erp_framework hook: `erp_framework.api.erp_api_site` + docs + erp-side tests, and a smoke
+   test against ra_erp (polymorphic `Sales` + `ItemMovementItem` inline):
+   `examples/ra_erp_smoke/`.
+
+**Status: all 8 done.** Commits: django-admin-api `042ddc7…`; django-erp-framework `e1a9766`
+(process_changeform refactor) and `259c3f7` (`erp_framework.api`).
+
+### Next (not in the prototype)
+
+- MCP: `/mcp/` (Streamable HTTP) + `manage.py mcp_serve` as a thin gate over these views.
+  Tool catalogue and JSON Schema to be designed (decisions 18–20 deferred).
+- slick_reporting reports at `/api/v1/reports/<slug>/`.
+- Token scopes (narrowing only), OAuth 2.1 with MCP.
+- File uploads (multipart) on writes; generic inlines on writes; `list_editable` bulk edit.
+- Final PyPI distribution name (`django-admin-api` is taken).
 
 ---
 
