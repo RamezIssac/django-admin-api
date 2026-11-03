@@ -382,6 +382,9 @@ def result_errors(result) -> dict:
             if non_form:
                 entry["non_form_errors"] = non_form
             inlines[formset.prefix] = entry
+    if not (fields or non_field or inlines):
+        # e.g. erp_framework's whole_changeform_validation returned False without adding an error
+        non_field = ["The change was rejected by validation."]
     return _envelope(fields, non_field, inlines)
 
 

@@ -319,11 +319,12 @@ def process_changeform(self, request, obj, change):
     formsets, inline_instances = self._create_formsets(request, form.instance, change=change)
     form_validated = form.is_valid()
     new_object = self.save_form(request, form, change=change) if form_validated else form.instance
-    valid = all_valid(formsets) and form_validated and \
-        self.whole_changeform_validation(request, form, formsets, change)
+    valid = all_valid(formsets) and form_validated and self.whole_changeform_validation(request, form, formsets, change)
     if valid:
         self.pre_save(form, formsets, change)
-        self.save_model(...); self.save_related(...); log_addition/log_change
+        self.save_model(...)
+        self.save_related(...)
+        log_addition / log_change
         self.post_save(request, new_object, form, formsets, change)
         changeform_saved.send(...)
     return ChangeformResult(valid, new_object if valid else None, form, formsets, change, ...)

@@ -217,6 +217,22 @@ class TestPipelineHooks:
         finally:
             del ClientAdmin.process_changeform
 
+    def test_rejection_without_error_message_gets_generic_one(self, api, ahmed):
+        from admin_api.writes import default_process_changeform
+        from tests.testapp.admin import ClientAdmin
+
+        def silent_reject(self, request, obj, change):
+            result = default_process_changeform(self, request, obj, change)
+            result.valid = False
+            return result
+
+        ClientAdmin.process_changeform = silent_reject
+        try:
+            status, body = api("patch", f"/api/v1/testapp/client/{ahmed.pk}/", {"name": "Zed"})
+        finally:
+            del ClientAdmin.process_changeform
+        assert status == 400 and body["non_field_errors"] == ["The change was rejected by validation."]
+
     def test_reversion_context_is_opened(self, api, sale):
         from tests.testapp.admin import SalesAdmin
 
