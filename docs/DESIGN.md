@@ -559,10 +559,12 @@ Phase 2 (MCP), one commit each:
 13. Streamable HTTP `/mcp/` on the official SDK (§14.5).
 14. stdio `manage.py mcp_serve` (§14.6).
 15. Conformance with the official client + version matrix (§14.7).
+16. erp_framework: `erp_framework.api.erp_mcp_site`, `changeform_saved` now sends `request`
+    (so receivers can check `is_dry_run`); ra_erp MCP smoke test. django-erp-framework PR #55
+    (`feature/admin-api`, with the two phase-1 commits rebased onto `develop`).
 
 ### Next
 
-- erp_framework: `erp_mcp_site` + ra_erp MCP smoke test.
 - slick_reporting reports at `/api/v1/reports/<slug>/` + a `run_report` tool.
 - OAuth 2.1 for remote MCP connectors.
 - File uploads (multipart) on writes; generic inlines on writes; `list_editable` bulk edit.
