@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import logging
 
-from ..errors import ApiError, PermissionDeniedError
+from ..auth import TokenAuthenticator
+from ..errors import ApiError, NotAuthenticated, PermissionDeniedError
 from .tools import ToolResult, ToolSpec
 
 logger = logging.getLogger("admin_api.mcp")
@@ -31,6 +32,8 @@ class AdminMcpSite:
 
     default_per_page = 25
     instructions = DEFAULT_INSTRUCTIONS
+    # Bearer tokens only: MCP clients are not browsers, and a session cookie must not be enough.
+    authenticators = [TokenAuthenticator]
 
     def __init__(
         self,
@@ -65,6 +68,15 @@ class AdminMcpSite:
 
     def get_tool(self, name: str, request=None) -> ToolSpec | None:
         return next((tool for tool in self.get_tools(request) if tool.name == name), None)
+
+    def authenticate(self, request):
+        """Set ``request.user`` from the first authenticator that recognizes the request."""
+        for authenticator_class in self.authenticators:
+            user = authenticator_class().authenticate(request)
+            if user is not None:
+                request.user = user
+                return user
+        raise NotAuthenticated("Send 'Authorization: Bearer <api token>'.")
 
     # --- calling tools -------------------------------------------------------------------------
     @staticmethod

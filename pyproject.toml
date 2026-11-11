@@ -2,7 +2,7 @@
 # NOTE: "django-admin-api" is already taken on PyPI; final distribution name TBD.
 name = "django-admin-api"
 version = "0.0.1"
-description = "A thin layer that makes Django ModelAdmin API-ready (and later MCP-ready), driven by api_ twins."
+description = "A thin layer that makes Django ModelAdmin API- and MCP-ready, driven by api_ twins."
 readme = "README.md"
 license = "MIT"
 authors = [{ name = "Ramez Ashraf" }]
@@ -16,6 +16,10 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 
+[project.optional-dependencies]
+# MCP transports (Streamable HTTP view, manage.py mcp_serve). The tool layer needs nothing extra.
+mcp = ["mcp>=2.3,<3"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -24,7 +28,7 @@ build-backend = "hatchling.build"
 packages = ["admin_api"]
 
 [dependency-groups]
-dev = ["pytest>=8", "pytest-django>=4.8", "jsonschema>=4.20"]
+dev = ["pytest>=8", "pytest-django>=4.8", "jsonschema>=4.20", "mcp>=2.3,<3"]
 
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "tests.settings"
