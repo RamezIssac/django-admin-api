@@ -34,6 +34,7 @@ dev = ["pytest>=8", "pytest-django>=4.8", "jsonschema>=4.20", "mcp>=2.3,<3"]
 DJANGO_SETTINGS_MODULE = "tests.settings"
 python_files = ["test_*.py"]
 pythonpath = ["."]
+markers = ["conformance: official MCP client against the real transports (live server, subprocess)"]
 
 [tool.ruff]
 line-length = 120
