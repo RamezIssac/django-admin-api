@@ -24,7 +24,7 @@ from django.http import HttpResponseBase, QueryDict
 from .changelist import build_changelist, get_columns, split_api_params
 from .encoders import encode_value
 from .errors import ApiError, NotFound, PermissionDeniedError
-from .writes import as_post_request, parse_json_body
+from .writes import InvalidJson, as_post_request
 
 
 class ActionNotSupported(ApiError):
@@ -57,8 +57,9 @@ def describe_actions(model_admin, request) -> list[dict]:
     return out
 
 
-def run_action(model_admin, request, name) -> dict:
-    payload = parse_json_body(request)
+def run_action(model_admin, request, name, payload: dict) -> dict:
+    if not isinstance(payload, dict):
+        raise InvalidJson("The action payload must be an object.")
     actions = model_admin.get_actions(request)
     if name not in actions:
         raise NotFound(f"No action {name!r} (or no permission).")
