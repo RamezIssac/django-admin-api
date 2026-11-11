@@ -321,6 +321,8 @@ mcp = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "django-subadmin", version = "5.2.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "django-subadmin", version = "6.1.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "jsonschema" },
     { name = "mcp" },
     { name = "pytest" },
@@ -336,10 +338,43 @@ provides-extras = ["mcp"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "django-subadmin", specifier = ">=5.2" },
     { name = "jsonschema", specifier = ">=4.20" },
     { name = "mcp", specifier = ">=2.3,<3" },
-    { name = "pytest", specifier = ">=8" },
+    { name = "pytest", specifier = ">=8.2" },
     { name = "pytest-django", specifier = ">=4.8" },
+]
+
+[[package]]
+name = "django-subadmin"
+version = "5.2.1"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version == '3.11.*'",
+    "python_full_version < '3.11'",
+]
+dependencies = [
+    { name = "django", version = "5.2.18", source = { registry = "https://pypi.org/simple" } },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f2/8d/5fb3f2a74d9eee3daf92e637333fd60b2d1b104d537a4e78dc5f12f8db00/django_subadmin-5.2.1.tar.gz", hash = "sha256:645574fbe32850705a95e841d9968f0d83cca9983ef489f58e4944d694db344e", size = 140498, upload-time = "2026-09-28T22:06:20.821Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ac/03/f272ab1eb6ab97450983b7ada3fcf856fce1ecea581924d6bb3a8e6fe389/django_subadmin-5.2.1-py3-none-any.whl", hash = "sha256:43fce3f0f9a3a5da3f8273c970909e2c4f76b14309b395509841cd1f19f9e110", size = 15972, upload-time = "2026-09-28T22:06:18.931Z" },
+]
+
+[[package]]
+name = "django-subadmin"
+version = "6.1.1"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.14'",
+    "python_full_version >= '3.12' and python_full_version < '3.14'",
+]
+dependencies = [
+    { name = "django", version = "6.1.2", source = { registry = "https://pypi.org/simple" } },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/00/cf/b01c374916a69a035559945ec23dfa6acd747b68658b31133060e2ff79c1/django_subadmin-6.1.1.tar.gz", hash = "sha256:e29d213635ad1c8fe57888d195f3eb5657a489654b23131078f8896460e3aef3", size = 141338, upload-time = "2026-09-28T22:06:04.427Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ce/f8/754914876f61686b41981916dd93881ba41f43df2597a1ff7e06240beb86/django_subadmin-6.1.1-py3-none-any.whl", hash = "sha256:c13476fabeb14b39fcb40302a11bf996e266392898892991d62419fe274f55ee", size = 16152, upload-time = "2026-09-28T22:06:03.111Z" },
 ]
 
 [[package]]

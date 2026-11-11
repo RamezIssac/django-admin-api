@@ -179,6 +179,7 @@ All URLs are under `<mount>/v1/`. The version comes from `AdminApiSite.version`.
 | DELETE | `/<app>/<model>/<pk>/` | delete | `has_delete_permission(obj)` |
 | GET | `/<app>/<model>/<pk>/delete-preview/` | cascade preview | `has_delete_permission(obj)` |
 | POST | `/<app>/<model>/actions/<name>/` | run an action | action's `allowed_permissions` |
+| any | `/<app>/<model>/<pk>/<child>/[<pk>/<child>/…]` + any tail above | nested admins (§15) | same, plus view on every ancestor |
 | — | `/reports/<slug>/` | **reserved** (slick_reporting, later) | — |
 | — | `/mcp/` (outside `/v1/`) | **reserved** (MCP, later) | — |
 
@@ -563,6 +564,11 @@ Phase 2 (MCP), one commit each:
     (so receivers can check `is_dry_run`); ra_erp MCP smoke test. django-erp-framework PR #55
     (`feature/admin-api`, with the two phase-1 commits rebased onto `develop`).
 
+Phase 3:
+
+17. Nested admins: generic layer (`admin_api.nested`) + django-subadmin adapter
+    (`admin_api.contrib.subadmin`), REST routes, MCP `parents` (§15).
+
 ### Next
 
 - slick_reporting reports at `/api/v1/reports/<slug>/` + a `run_report` tool.
@@ -698,3 +704,85 @@ the test client, gatekeeping, ASGI), `test_mcp_stdio.py` (official client in-pro
 `test_mcp_conformance.py` (official client vs. live HTTP server and a real `mcp_serve`
 subprocess, in both the 2025-11-25 handshake era and the 2026-07-28 stateless era).
 `scripts/matrix.sh`: Django 4.2 / 5.2 / 6.1 × `mcp` 2.3.0 / latest `<3`.
+
+---
+
+## 15. Nested admins (milestone 17, as built)
+
+Goal: admins nested with django-subadmin (`SubAdmin` hung off a registered `RootSubAdmin`, any
+depth) work in REST and MCP. All the work is in admin_api; django-subadmin is not modified and
+not a dependency.
+
+### 15.1 Addressing
+
+One path drives every surface. The REST path minus the pks is the MCP `model`; the pks in order
+are `parents`. Each child segment is the child's `model_name` (as subadmin's own URLs).
+
+| | items of sale 7 of client 1 |
+|---|---|
+| HTML | `/admin/store/client/1/sales/7/salesitem/` |
+| REST | `/api/v1/store/client/1/sales/7/salesitem/` (+ `schema/`, `actions/<name>/`, `<pk>/`, `<pk>/delete-preview/`) |
+| MCP | `model="store.client/sales/salesitem"`, `parents=[1, 7]` |
+
+`admin_api.nested.ModelPath` (`parse`, `label`, `child`, `url`, `url_template`). A nested
+admin also registered top level (e.g. `Sales`) is listed twice: different admins, different
+paths.
+
+### 15.2 Layers
+
+- **Core (`admin_api.nested`, generic).** `NestedAdapter` protocol: `get_children(admin)`,
+  `is_child(admin)`, `segment(child)`, `init_args(child)`, `prepare_request(admin, request,
+  parents)`. `AdminApiSite.nested_adapters` (default `[SubAdminAdapter]`).
+  `AdminApiSite.get_api_children(admin) → {segment: api_admin}` (exposed only),
+  `get_admin_chain(path) → [root, …, target]` or `None`, `prepare_nested_request(…)`.
+- **API twins of nested admins.** `get_api_admin(child)` builds `(ApiAdminMixin, ChildCls)
+  (*adapter.init_args(child))`, i.e. `(parent_model, api_parent)` for subadmin, cached per
+  child instance. Children are always taken from the **API** parent's `subadmin_instances`, so
+  the whole chain is API-aware (ancestor `get_object` goes through api twins and scoped
+  `has_*_permission`).
+- **subadmin adapter (`admin_api.contrib.subadmin`, duck-typed).** Children =
+  `subadmin_instances`; `prepare_request` sets `request.subadmin =
+  admin.get_subadmin_helper(request, parents)` (loads each ancestor via its admin's
+  `get_object`, requires `has_view_or_change_permission(obj)` on each, checks the chain).
+  `Http404` → `not_found`, `PermissionDenied` → `permission_denied`. With the helper set,
+  subadmin itself filters the queryset, excludes the parent FK and sets it on save.
+- **Services.** `get_model_admin(…, segments=, parents=)` resolves the chain, checks the parent
+  count (`400 bad_parents`), prepares the request, then the usual view check + scope; it sets
+  `request.admin_api_target` (`Target(api_site, path, parents, chain)`). Everything after that
+  (changelist, schema, detail, writes, actions, delete) is unchanged.
+- **REST.** One catch-all route after the flat ones, `<app>/<model>/<path:nested>/`, parsed by
+  `views.nested.parse_nested` into `(segments, parents, kind, kwargs)` and dispatched to the
+  normal view classes with `segments`/`parents`. Segments must look like a `model_name`; a pk
+  of `actions` / a tail of `delete-preview` resolve as on flat models.
+- **MCP.** Every model tool takes optional `parents`; `model` accepts a path. Hiding an admin
+  (`api_enabled` / `mcp_enabled = False`, `is_exposed`) hides its descendants.
+
+### 15.3 Discovery
+
+- Registry / `list_models`: nested entries after a viewable parent (children of a model the
+  user cannot view are not listed). REST: `path`, `nested_under` (the model of each parent pk),
+  `url: null`, `url_template` (`/api/v1/store/client/{0}/sales/`). MCP: `model` = path,
+  `nested_under`.
+- `/schema/` / `describe_model`: `children: [{model, name, name_plural}]` (REST also
+  `segment`); nested schemas carry `model.path` and `model.parents`.
+- Detail: REST `children: {"sales": "/api/v1/store/client/1/sales/"}`; MCP `get_object`
+  `children: {"sales": {"model": "store.client/sales", "parents": [1]}}`. Only children the
+  user may view (scopes included). No counts (no extra queries). Not on write responses.
+
+### 15.4 Permissions and scopes
+
+Free from the design: ancestors are checked by subadmin through the API parents'
+`has_view_or_change_permission`, which includes token scopes. A token therefore needs a view
+scope on every ancestor (`store.client:view` + `store.sales:view` for `store.client/sales`).
+
+### 15.5 Tests and versions
+
+`tests/test_subadmin.py` (REST + MCP + permissions + scopes + 2 levels) on
+`tests/subadmin_site.py`; `tests/test_nested.py` for path parsing (always runs).
+django-subadmin is a dev dependency (5.2.x for Django 5.2, 6.1.x for Django ≥ 6.1, Python ≥
+3.12); it has no Django 4.2 release, so the module skips there (`importorskip(…,
+exc_type=ImportError)`). `scripts/matrix.sh` installs the matching subadmin per Django row.
+
+HTML caveat (not an API issue): erp_framework's `EntityAdmin` and `SubAdminMixin` both set
+`change_form_template`, `change_list_template` and `get_urls`; combining them in the HTML admin
+needs care.

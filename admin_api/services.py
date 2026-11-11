@@ -25,32 +25,50 @@ from .changelist import (
     split_api_params,
 )
 from .encoders import encode_value
-from .errors import ApiError, NotFound, PermissionDeniedError
+from .errors import NotFound, PermissionDeniedError
+from .nested import BadParents, ModelPath, Target
 from .resolver import resolve
 
 
 # --------------------------------------------------------------------------------------------
 # lookup
 # --------------------------------------------------------------------------------------------
-def get_model_admin(api_site, request, app_label: str, model_name: str):
-    """The API admin for ``app_label.model_name``, if exposed and viewable by ``request.user``."""
-    model_admin = api_site.get_model_admin(app_label, model_name)
-    if model_admin is None:
-        raise NotFound(f"No API for {app_label}.{model_name}.")
+def get_model_admin(api_site, request, app_label: str, model_name: str, *, segments=(), parents=()):
+    """The API admin for ``app_label.model_name`` (or the admin nested under it at ``segments``,
+    inside the objects ``parents``), if exposed and viewable by ``request.user``.
+
+    Sets ``request.admin_api_target`` (:class:`admin_api.nested.Target`). For a nested admin,
+    also prepares ``request`` for it (e.g. ``request.subadmin``): every ancestor is loaded through
+    its admin and must be viewable.
+    """
+    path = ModelPath(app_label, model_name, tuple(segments))
+    chain = api_site.get_admin_chain(path)
+    if chain is None:
+        raise NotFound(f"No API for {path.label}.")
+    model_admin = chain[-1]
+    parents = list(parents or ())
+    if len(parents) != path.depth:
+        raise BadParents(
+            f"{path.label} needs {path.depth} parent pk(s), one per level, got {len(parents)}."
+            if path.depth
+            else f"{path.label} is not nested: no parents expected."
+        )
+    if path.depth:
+        api_site.prepare_nested_request(model_admin, request, parents)
     if not model_admin.has_view_or_change_permission(request):
         raise PermissionDeniedError()
     # Second line of defense: also enforced in ApiAdminMixin.has_*_permission, but an admin may
     # override those without calling super().
     scopes.check(request, model_admin.opts, "view")
+    request.admin_api_target = Target(api_site, path, parents, chain)
     return model_admin
 
 
-def get_model_admin_by_label(api_site, request, label: str):
-    """Same as :func:`get_model_admin` for a ``"app_label.model_name"`` string."""
-    app_label, sep, model_name = (label or "").strip().lower().partition(".")
-    if not sep or not app_label or not model_name:
-        raise ApiError(f"Expected 'app_label.model_name', got {label!r}.", code="bad_model")
-    return get_model_admin(api_site, request, app_label, model_name)
+def get_model_admin_by_label(api_site, request, label: str, parents=()):
+    """Same as :func:`get_model_admin` for ``"app_label.model_name"`` or a nested path
+    ``"app_label.model_name/child/grandchild"``."""
+    path = ModelPath.parse(label)
+    return get_model_admin(api_site, request, path.app_label, path.model_name, segments=path.segments, parents=parents)
 
 
 def get_object(model_admin, request, object_id):
@@ -63,20 +81,29 @@ def get_object(model_admin, request, object_id):
 # --------------------------------------------------------------------------------------------
 # read
 # --------------------------------------------------------------------------------------------
-def registry(api_site, request) -> dict:
-    """The apps/models the current user may use, with their permissions."""
+def _api_base(api_site):
     try:
-        base = reverse(f"{api_site.name}:index")
+        return reverse(f"{api_site.name}:index")
     except NoReverseMatch:  # API urls not mounted (e.g. MCP only)
-        base = None
+        return None
+
+
+def registry(api_site, request) -> dict:
+    """The apps/models the current user may use, with their permissions.
+
+    Nested admins are listed too, after a viewable parent, with ``path``, ``nested_under`` (the
+    model of each parent pk) and ``url_template`` (``{0}``, ``{1}``… stand for the parent pks).
+    """
+    base = _api_base(api_site)
     app_dict: dict[str, dict] = {}
-    for model, model_admin in api_site.exposed_admins():
+
+    def add(model_admin, path, ancestors):
         if not model_admin.has_module_permission(request):
-            continue
+            return
         perms = model_admin.get_model_perms(request)
         if not any(perms.values()):
-            continue
-        opts = model._meta
+            return
+        opts = model_admin.model._meta
         app = app_dict.setdefault(
             opts.app_label,
             {
@@ -85,20 +112,63 @@ def registry(api_site, request) -> dict:
                 "models": [],
             },
         )
-        app["models"].append(
-            {
-                "model": opts.model_name,
-                "object_name": opts.object_name,
-                "name": str(opts.verbose_name),
-                "name_plural": str(opts.verbose_name_plural),
-                "perms": perms,
-                "url": f"{base}{opts.app_label}/{opts.model_name}/" if base else None,
-            }
-        )
+        entry = {
+            "model": opts.model_name,
+            "object_name": opts.object_name,
+            "name": str(opts.verbose_name),
+            "name_plural": str(opts.verbose_name_plural),
+            "perms": perms,
+            "url": path.url(base) if base and not path.depth else None,
+        }
+        if path.depth:
+            entry["path"] = path.label
+            entry["nested_under"] = list(ancestors)
+            entry["url_template"] = path.url_template(base) if base else None
+        app["models"].append(entry)
+        # children need a viewable parent object
+        if not model_admin.has_view_or_change_permission(request):
+            return
+        label = f"{opts.app_label}.{opts.model_name}"
+        for segment, child in api_site.get_api_children(model_admin).items():
+            add(child, path.child(segment), [*ancestors, label])
+
+    for model, model_admin in api_site.exposed_admins():
+        add(model_admin, ModelPath(model._meta.app_label, model._meta.model_name), [])
     app_list = sorted(app_dict.values(), key=lambda a: a["name"].lower())
     for app in app_list:
-        app["models"].sort(key=lambda m: m["name"].lower())
+        app["models"].sort(key=lambda m: (m["name"].lower(), m.get("path", "")))
     return {"version": api_site.version, "apps": app_list}
+
+
+def child_links(request, model_admin, pk=None) -> list[dict]:
+    """The admins nested under ``model_admin`` that ``request.user`` may view.
+
+    ``[{"segment", "model" (path), "admin", "name", "name_plural"}]``, plus ``"parents"`` and
+    ``"url"`` (REST, ``None`` if not mounted) when the (encoded) ``pk`` of an object is given.
+    No queries.
+    """
+    target = getattr(request, "admin_api_target", None)
+    if target is None:
+        return []
+    base = _api_base(target.api_site) if pk is not None else None
+    out = []
+    for segment, child in target.api_site.get_api_children(model_admin).items():
+        if not child.has_view_or_change_permission(request):  # includes token scopes
+            continue
+        path = target.path.child(segment)
+        opts = child.model._meta
+        link = {
+            "segment": segment,
+            "model": path.label,
+            "admin": child,
+            "name": str(opts.verbose_name),
+            "name_plural": str(opts.verbose_name_plural),
+        }
+        if pk is not None:
+            link["parents"] = [*target.parents, pk]
+            link["url"] = path.url(base, link["parents"]) if base else None
+        out.append(link)
+    return out
 
 
 def changelist(api_site, model_admin, request) -> dict:
@@ -167,7 +237,7 @@ def schema(api_site, model_admin, request) -> dict:
     cl = build_changelist(model_admin, request, columns, schema_only=True)
     opts = model_admin.model._meta
     search_fields = list(model_admin.get_search_fields(request) or ())
-    return {
+    payload = {
         "model": {
             "app_label": opts.app_label,
             "model": opts.model_name,
@@ -202,6 +272,14 @@ def schema(api_site, model_admin, request) -> dict:
         "input_schema": input_schemas(model_admin, request),
         "actions": describe_actions(model_admin, request),
     }
+    target = getattr(request, "admin_api_target", None)
+    if target is not None and target.path.depth:
+        payload["model"]["path"] = target.path.label
+        payload["model"]["parents"] = list(target.parents)
+    children = child_links(request, model_admin)
+    if children:
+        payload["children"] = [{k: link[k] for k in ("segment", "model", "name", "name_plural")} for link in children]
+    return payload
 
 
 def detail(model_admin, request, object_id) -> dict:
@@ -210,7 +288,11 @@ def detail(model_admin, request, object_id) -> dict:
     obj = get_object(model_admin, request, object_id)
     if not model_admin.has_view_or_change_permission(request, obj):
         raise PermissionDeniedError()
-    return serialize_object(model_admin, request, obj)
+    payload = serialize_object(model_admin, request, obj)
+    children = child_links(request, model_admin, payload["pk"])
+    if children:
+        payload["children"] = {link["segment"]: link["url"] for link in children}
+    return payload
 
 
 # --------------------------------------------------------------------------------------------

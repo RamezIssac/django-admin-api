@@ -109,10 +109,28 @@ On the admin: `mcp_description = "…"` (context for the LLM), `mcp_enabled = Fa
 MCP only). In hooks: `request.is_mcp`, and `request.is_dry_run` to skip side effects such as
 e-mails during a dry run (or use `transaction.on_commit`, which a dry run discards).
 
+## Nested admins (django-subadmin)
+
+Admins nested with [django-subadmin](https://github.com/inueni/django-subadmin) work in the REST
+API and in MCP with no configuration. The address follows the admin URL:
+
+| | items of sale 7 of client 1 |
+|---|---|
+| HTML admin | `/admin/store/client/1/sales/7/salesitem/` |
+| REST | `/api/v1/store/client/1/sales/7/salesitem/` (+ `schema/`, `actions/<name>/`, `<pk>/`, `<pk>/delete-preview/`) |
+| MCP | `model="store.client/sales/salesitem"`, `parents=[1, 7]` |
+
+Lists are scoped to the parent, the parent FK is set on create (and is not accepted in payloads),
+and every ancestor must be viewable by the user (and by the token's scopes). The registry /
+`list_models` list nested admins with `nested_under`; object details and `/schema/` /
+`describe_model` link to `children`. `api_enabled = False` / `mcp_enabled = False` on a
+`SubAdmin` hides it and everything nested under it. Other nesting libraries can plug in with a
+`NestedAdapter` (`admin_api.nested`).
+
 ## Development
 
 ```bash
 uv sync
 uv run pytest                    # everything; -m "not conformance" skips the live-server/subprocess tests
-scripts/matrix.sh                # Django 4.2 / 5.2 / 6.1 x mcp 2.3.0 / latest
+scripts/matrix.sh                # Django 4.2 / 5.2 / 6.1 x mcp 2.3.0 / latest (+ django-subadmin on 5.2 / 6.1)
 ```
