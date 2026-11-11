@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import logging
+from weakref import WeakSet
 
 from ..auth import TokenAuthenticator
 from ..errors import ApiError, NotAuthenticated, PermissionDeniedError
 from .tools import ToolResult, ToolSpec
 
 logger = logging.getLogger("admin_api.mcp")
+
+_all_sites: WeakSet = WeakSet()
+
+
+def all_mcp_sites():
+    return list(_all_sites)
+
 
 DEFAULT_INSTRUCTIONS = """\
 This server exposes a Django admin. You act as the authenticated user, with exactly their \
@@ -50,6 +58,7 @@ class AdminMcpSite:
         self.server_name = server_name or name
         if instructions is not None:
             self.instructions = instructions
+        _all_sites.add(self)
 
     # --- policy hooks (override in a subclass) -------------------------------------------------
     def is_exposed(self, model_admin) -> bool:
