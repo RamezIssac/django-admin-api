@@ -1,5 +1,6 @@
 from django import forms
 from django.contrib import admin, messages
+from django.db import transaction
 from django.utils.html import format_html
 
 import admin_api
@@ -8,9 +9,14 @@ from .models import Client, Sales, SalesItem, Secret, Tag
 
 site = admin.AdminSite(name="testadmin")
 
+# Side-effect probes for the MCP dry_run tests
+SAVE_LOG: list = []  # (slug, request.is_dry_run) per save_model call
+ON_COMMIT_LOG: list = []  # slugs whose on_commit callback ran
+
 
 @admin.register(Client, site=site)
 class ClientAdmin(admin_api.ApiAdminMixin, admin.ModelAdmin):
+    mcp_description = "Customers. Sales point to a client."
     list_display = ["name", "badge"]
     api_list_display = ["name", "notes_length"]  # explicit twin: callables listed here are exposed
     readonly_fields = []
@@ -51,7 +57,7 @@ class SalesItemInline(admin.TabularInline):
 
 @admin.register(Tag, site=site)
 class TagAdmin(admin.ModelAdmin):
-    pass
+    mcp_enabled = False  # in the REST API, hidden from MCP
 
 
 class SalesForm(forms.ModelForm):
@@ -111,6 +117,8 @@ class SalesAdmin(admin.ModelAdmin):  # plain admin, no mixin
     def save_model(self, request, obj, form, change):
         obj.saved_via_api = request.is_api
         super().save_model(request, obj, form, change)
+        SAVE_LOG.append((obj.slug, getattr(request, "is_dry_run", None)))
+        transaction.on_commit(lambda: ON_COMMIT_LOG.append(obj.slug))
         messages.info(request, f"Saved {obj.slug}")
 
     def save_related(self, request, form, formsets, change):
