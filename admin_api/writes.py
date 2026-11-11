@@ -259,6 +259,11 @@ def _build_inline(data, prefix, FormSet, inline, request, obj, change, rows, inl
     existing = list(inline_queryset(FormSet, inline, request, obj).order_by("pk")) if change else []
     by_pk = {str(o.pk): o for o in existing}
     updates, new_rows = {}, []
+    # The admin's inline forms silently ignore rows the user may not add/change (and the formset
+    # rejects deletes only when can_delete is off). The API reports them instead.
+    can_add = inline.has_add_permission(request, obj)
+    can_change = inline.has_change_permission(request, obj)
+    can_delete = FormSet.can_delete and inline.has_delete_permission(request, obj)
     for index, row in enumerate(rows):
         errs: dict = {}
         _check_keys(row, allowed, errs)
@@ -267,9 +272,15 @@ def _build_inline(data, prefix, FormSet, inline, request, obj, change, rows, inl
                 errs.setdefault("pk", []).append("No such row in this inline.")
             else:
                 updates[str(row["pk"])] = row
+                if row.get(ROW_DELETE_KEY) and not can_delete:
+                    errs.setdefault(ROW_DELETE_KEY, []).append("You may not delete rows of this inline.")
+                if not can_change and any(k in base_fields for k in row):
+                    errs.setdefault("non_field_errors", []).append("You may not change rows of this inline.")
         else:
             if row.get(ROW_DELETE_KEY):
                 errs.setdefault(ROW_DELETE_KEY, []).append("Only existing rows (with pk) can be deleted.")
+            elif not can_add:
+                errs.setdefault("non_field_errors", []).append("You may not add rows to this inline.")
             new_rows.append(row)
         if errs:
             row_errors.append({"index": index, "pk": row.get("pk"), "errors": errs})

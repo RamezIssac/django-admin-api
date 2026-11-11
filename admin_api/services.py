@@ -12,6 +12,7 @@ from django.apps import apps
 from django.contrib.admin.utils import unquote
 from django.urls import NoReverseMatch, reverse
 
+from . import scopes
 from .changelist import (
     PER_PAGE_PARAM,
     SHAPE_PARAM,
@@ -38,6 +39,9 @@ def get_model_admin(api_site, request, app_label: str, model_name: str):
         raise NotFound(f"No API for {app_label}.{model_name}.")
     if not model_admin.has_view_or_change_permission(request):
         raise PermissionDeniedError()
+    # Second line of defense: also enforced in ApiAdminMixin.has_*_permission, but an admin may
+    # override those without calling super().
+    scopes.check(request, model_admin.opts, "view")
     return model_admin
 
 
@@ -229,6 +233,7 @@ def create(model_admin, request, payload) -> dict:
 
     if not model_admin.has_add_permission(request):
         raise PermissionDeniedError()
+    scopes.check(request, model_admin.opts, "add")
     result, messages = save_from_payload(model_admin, request, None, _load(payload), change=False, partial=False)
     return _saved(model_admin, request, result, messages)
 
@@ -239,6 +244,7 @@ def update(model_admin, request, object_id, payload, *, partial: bool) -> dict:
     obj = get_object(model_admin, request, object_id)
     if not model_admin.has_change_permission(request, obj):
         raise PermissionDeniedError()
+    scopes.check(request, model_admin.opts, "change")
     result, messages = save_from_payload(model_admin, request, obj, _load(payload), change=True, partial=partial)
     return _saved(model_admin, request, result, messages)
 
@@ -249,6 +255,7 @@ def delete(model_admin, request, object_id) -> dict:
     obj = get_object(model_admin, request, object_id)
     if not model_admin.has_delete_permission(request, obj):
         raise PermissionDeniedError()
+    scopes.check(request, model_admin.opts, "delete")
     return {"deleted": delete_object(model_admin, request, obj)}
 
 
@@ -258,6 +265,7 @@ def delete_preview(model_admin, request, object_id) -> dict:
     obj = get_object(model_admin, request, object_id)
     if not model_admin.has_delete_permission(request, obj):
         raise PermissionDeniedError()
+    scopes.check(request, model_admin.opts, "delete")
     return _preview(model_admin, request, obj)
 
 

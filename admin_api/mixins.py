@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from . import scopes
 from .resolver import is_resolving, resolve, resolving
 
 
@@ -63,8 +64,25 @@ class ApiAdminMixin:
 
     def get_inlines(self, request, obj):
         if _is_api(request) and not is_resolving(request, "inlines"):
-            return resolve(self, "inlines", request, obj)
+            inlines = resolve(self, "inlines", request, obj)
+            if scopes.request_scopes(request) is not None:
+                # inline formsets check the inline's own has_*_permission: scope those too
+                inlines = [scopes.scoped_inline_class(inline) for inline in inlines]
+            return inlines
         return super().get_inlines(request, obj)
+
+    # --- permissions: token scopes narrow, never widen ---------------------------------------
+    def has_view_permission(self, request, obj=None):
+        return super().has_view_permission(request, obj) and scopes.request_allows(request, self.opts, "view")
+
+    def has_add_permission(self, request):
+        return super().has_add_permission(request) and scopes.request_allows(request, self.opts, "add")
+
+    def has_change_permission(self, request, obj=None):
+        return super().has_change_permission(request, obj) and scopes.request_allows(request, self.opts, "change")
+
+    def has_delete_permission(self, request, obj=None):
+        return super().has_delete_permission(request, obj) and scopes.request_allows(request, self.opts, "delete")
 
     def get_actions(self, request, action_location=None):
         if _is_api(request) and not is_resolving(request, "actions"):
