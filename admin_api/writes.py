@@ -418,9 +418,9 @@ def save_from_payload(model_admin, request, obj, payload: dict, *, change: bool,
 # --------------------------------------------------------------------------------------------
 _FORM_TYPES = [
     (forms.BooleanField, "boolean"),
-    (forms.IntegerField, "integer"),
-    (forms.DecimalField, "decimal"),
+    (forms.DecimalField, "decimal"),  # Decimal/FloatField subclass IntegerField: check them first
     (forms.FloatField, "number"),
+    (forms.IntegerField, "integer"),
     (forms.SplitDateTimeField, "datetime"),
     (forms.DateTimeField, "datetime"),
     (forms.DateField, "date"),

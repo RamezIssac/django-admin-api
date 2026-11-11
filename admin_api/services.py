@@ -159,6 +159,7 @@ def schema(api_site, model_admin, request) -> dict:
     from django.contrib.admin.views.main import ALL_VAR, ORDER_VAR, PAGE_VAR, SEARCH_VAR
 
     from .actions import describe_actions
+    from .jsonschema import input_schemas
     from .writes import describe_form
 
     split_api_params(request)
@@ -198,6 +199,7 @@ def schema(api_site, model_admin, request) -> dict:
         },
         "shapes": {"param": SHAPE_PARAM, "values": list(SHAPES), "default": "objects"},
         "form": describe_form(model_admin, request) if model_admin.has_add_permission(request) else None,
+        "input_schema": input_schemas(model_admin, request),
         "actions": describe_actions(model_admin, request),
     }
 
