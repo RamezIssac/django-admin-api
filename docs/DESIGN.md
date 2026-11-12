@@ -703,7 +703,8 @@ message capture. The SDK diverts stray stdout to stderr while serving.
 the test client, gatekeeping, ASGI), `test_mcp_stdio.py` (official client in-process, CLI),
 `test_mcp_conformance.py` (official client vs. live HTTP server and a real `mcp_serve`
 subprocess, in both the 2025-11-25 handshake era and the 2026-07-28 stateless era).
-`scripts/matrix.sh`: Django 4.2 / 5.2 / 6.1 × `mcp` 2.3.0 / latest `<3`.
+`noxfile.py` (`uvx nox`): Django 4.2 / 5.2 / 6.1 × `mcp` 2.3.0 / latest `<3`, each Django on
+the lowest Python it supports within our range (3.10 / 3.12 / 3.13), plus a `lint` session.
 
 ---
 
@@ -781,7 +782,7 @@ scope on every ancestor (`store.client:view` + `store.sales:view` for `store.cli
 `tests/subadmin_site.py`; `tests/test_nested.py` for path parsing (always runs).
 django-subadmin is a dev dependency (5.2.x for Django 5.2, 6.1.x for Django ≥ 6.1, Python ≥
 3.12); it has no Django 4.2 release, so the module skips there (`importorskip(…,
-exc_type=ImportError)`). `scripts/matrix.sh` installs the matching subadmin per Django row.
+exc_type=ImportError)`). `noxfile.py` installs the matching subadmin per Django row.
 
 HTML caveat (not an API issue): erp_framework's `EntityAdmin` and `SubAdminMixin` both set
 `change_form_template`, `change_list_template` and `get_urls`; combining them in the HTML admin

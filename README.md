@@ -132,5 +132,6 @@ and every ancestor must be viewable by the user (and by the token's scopes). The
 ```bash
 uv sync
 uv run pytest                    # everything; -m "not conformance" skips the live-server/subprocess tests
-scripts/matrix.sh                # Django 4.2 / 5.2 / 6.1 x mcp 2.3.0 / latest (+ django-subadmin on 5.2 / 6.1)
+uvx nox                          # lint + matrix: Django 4.2 / 5.2 / 6.1 x mcp 2.3.0 / latest (+ django-subadmin on 5.2 / 6.1)
+uvx nox -l                       # list sessions; run one with -s "tests(django=6.1, mcp=latest)"
 ```
