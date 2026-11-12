@@ -1,5 +1,7 @@
 # admin_api
 
+[![CI](https://github.com/RamezIssac/django-admin-api/actions/workflows/ci.yml/badge.svg)](https://github.com/RamezIssac/django-admin-api/actions/workflows/ci.yml)
+
 A thin layer that makes Django `ModelAdmin` API-ready and MCP-ready.
 
 The same `ModelAdmin` drives the HTML admin and the JSON API. Where the API should behave
