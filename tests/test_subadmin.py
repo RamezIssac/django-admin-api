@@ -329,3 +329,38 @@ def test_mcp_parent_permission(call, data):
         "list_objects", {"model": "testapp.client/sales", "parents": [data["a"].pk]}, user=staff("view_sales")
     )
     assert err and out["error"] == "permission_denied"
+
+
+# --------------------------------------------------------------------------------------------
+# custom views (@admin_api.view) on a nested admin
+# --------------------------------------------------------------------------------------------
+def test_nested_views_rest(api, data):
+    a, s1 = data["a"], data["s1"]
+    status, body = api("get", sales_url(data, "schema"))
+    urls = {v["name"]: v["url"] for v in body["views"]}
+    assert urls == {
+        "totals": f"/api/v1/testapp/client/{a.pk}/sales/views/totals/",
+        "lines": f"/api/v1/testapp/client/{a.pk}/sales/{{pk}}/views/lines/",
+    }
+    status, body = api("get", sales_url(data, "views", "totals"))
+    assert status == 200 and body["result"] == {"count": 2, "slugs": ["S-1", "S-2"]}  # scoped to the parent
+    status, body = api("get", sales_url(data, s1.pk, "views", "lines"))
+    assert status == 200 and body["result"] == {"sale": "S-1", "items": 2}
+    status, body = api("get", sales_url(data, s1.pk))
+    assert body["views"] == {"lines": f"/api/v1/testapp/client/{a.pk}/sales/{s1.pk}/views/lines/"}
+    # another client's sale is not reachable under this parent
+    status, _ = api("get", sales_url(data, data["s3"].pk, "views", "lines"))
+    assert status == 404
+
+
+def test_nested_views_mcp(call, data):
+    a, s1 = data["a"], data["s1"]
+    out, _ = call("list_models")
+    nested = next(m for m in out["models"] if m["model"] == "testapp.client/sales")
+    assert [v["name"] for v in nested["views"]] == ["totals", "lines"]
+    out, err = call("run_view", {"model": "testapp.client/sales", "parents": [a.pk], "view": "totals"})
+    assert not err and out["result"]["count"] == 2
+    out, err = call("run_view", {"model": "testapp.client/sales", "parents": [a.pk], "view": "lines", "pk": s1.pk})
+    assert not err and out["result"]["items"] == 2
+    out, err = call("run_view", {"model": "testapp.client/sales", "view": "totals"})
+    assert err and out["error"] == "bad_parents"
