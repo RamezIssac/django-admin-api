@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FORCE_COLOR: "1"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - run: uvx nox -s lint
+
+  # The matrix comes from noxfile.py: one job per `tests(...)` session.
+  sessions:
+    runs-on: ubuntu-latest
+    outputs:
+      tests: ${{ steps.list.outputs.tests }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - id: list
+        run: |
+          tests=$(uvx nox -l --json -s tests | jq -c '[.[].session]')
+          echo "tests=$tests" >> "$GITHUB_OUTPUT"
+          echo "$tests" | jq .
+
+  tests:
+    needs: sessions
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        session: ${{ fromJSON(needs.sessions.outputs.tests) }}
+    name: ${{ matrix.session }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            noxfile.py
+      # uv downloads the Python each session asks for (3.10 / 3.12 / 3.13).
+      - run: uvx nox -s "${{ matrix.session }}"

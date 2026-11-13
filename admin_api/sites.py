@@ -8,6 +8,7 @@ from django.urls import path
 from django.views.decorators.csrf import csrf_exempt
 
 from .auth import SessionAuthenticator, TokenAuthenticator
+from .contrib.subadmin import SubAdminAdapter
 from .errors import ApiError, MethodNotAllowed, NotAuthenticated, PermissionDeniedError
 from .mixins import ApiAdminMixin
 
@@ -29,6 +30,8 @@ class AdminApiSite:
     authenticators = [TokenAuthenticator, SessionAuthenticator]
     version = "v1"
     max_page_size = 500
+    # Nested admins (see admin_api.nested). Duck-typed: inactive unless the library is used.
+    nested_adapters = [SubAdminAdapter]
 
     def __init__(
         self,
@@ -41,6 +44,7 @@ class AdminApiSite:
         self.admin_site = admin_site or admin.site
         self.name = name
         self._api_admins: dict = {}
+        self._adapters = [adapter() for adapter in self.nested_adapters]
         if version is not None:
             self.version = version
         if register_token_admin:
@@ -81,12 +85,18 @@ class AdminApiSite:
         """
         if isinstance(model_admin, ApiAdminMixin):
             return model_admin
-        key = model_admin.model
+        adapter = self.get_nested_adapter(model_admin)
+        # nested admins are cached per instance: the same class may be mounted under several parents
+        key = model_admin.model if adapter is None else ("nested", id(model_admin))
         cached = self._api_admins.get(key)
         if cached is None or cached[0] is not model_admin:
             cls = type(model_admin)
             api_cls = type(f"Api{cls.__name__}", (ApiAdminMixin, cls), {"__module__": cls.__module__})
-            cached = (model_admin, api_cls(model_admin.model, model_admin.admin_site))
+            if adapter is None:
+                api_admin = api_cls(model_admin.model, model_admin.admin_site)
+            else:
+                api_admin = api_cls(*adapter.init_args(model_admin))
+            cached = (model_admin, api_admin)
             self._api_admins[key] = cached
         return cached[1]
 
@@ -103,6 +113,41 @@ class AdminApiSite:
         for model, model_admin in self.admin_site._registry.items():
             if self.is_exposed(model_admin):
                 yield model, self.get_api_admin(model_admin)
+
+    # --- nested admins (admin_api.nested) -----------------------------------------------------
+    def get_nested_adapter(self, model_admin):
+        """The adapter handling ``model_admin`` as a nested admin, or ``None`` for top-level admins."""
+        return next((a for a in self._adapters if a.is_child(model_admin)), None)
+
+    def get_api_children(self, model_admin) -> dict:
+        """``{segment: api_admin}`` of the exposed admins nested directly under ``model_admin``."""
+        children = {}
+        for adapter in self._adapters:
+            for child in adapter.get_children(model_admin):
+                segment = adapter.segment(child)
+                if segment not in children and self.is_exposed(child):
+                    children[segment] = self.get_api_admin(child)
+        return children
+
+    def get_admin_chain(self, path) -> list | None:
+        """API admins from the root to the target of ``path`` (a :class:`~admin_api.nested.ModelPath`),
+        or ``None`` when any level is missing or not exposed (hiding an admin hides its children)."""
+        root = self.get_model_admin(path.app_label, path.model_name)
+        if root is None:
+            return None
+        chain = [root]
+        for segment in path.segments:
+            child = self.get_api_children(chain[-1]).get(segment)
+            if child is None:
+                return None
+            chain.append(child)
+        return chain
+
+    def prepare_nested_request(self, model_admin, request, parents: list) -> None:
+        """Let the nested ``model_admin``'s library load and check the ancestors for ``request``."""
+        adapter = self.get_nested_adapter(model_admin)
+        if adapter is not None:
+            adapter.prepare_request(model_admin, request, parents)
 
     # --- view plumbing ----------------------------------------------------------------------
     def api_view(self, view, methods=("GET",)):
@@ -128,6 +173,7 @@ class AdminApiSite:
     def get_urls(self):
         from .views.changelist import ActionView, ChangeListView, SchemaView
         from .views.detail import DeletePreviewView, ObjectView
+        from .views.nested import NESTED_METHODS, nested_view
         from .views.registry import RegistryView
 
         v = self.version
@@ -154,6 +200,12 @@ class AdminApiSite:
                 f"{model}<str:object_id>/delete-preview/",
                 self.api_view(DeletePreviewView.as_view(api_site=self)),
                 name="delete_preview",
+            ),
+            # nested admins: <pk>/<child>/[<pk>/<child>/…] then the same tails as above
+            path(
+                f"{model}<path:nested>/",
+                self.api_view(nested_view(self), methods=NESTED_METHODS),
+                name="nested",
             ),
         ]
 
