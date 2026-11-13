@@ -249,3 +249,27 @@ class TestPipelineHooks:
         finally:
             del SalesAdmin.create_revision
         assert opened == ["root"]
+
+
+def test_inline_rows_without_permission_are_rejected_not_ignored(client, db, sale):
+    """The HTML admin silently ignores inline rows the user may not add/change; the API reports them."""
+    from django.contrib.auth import get_user_model
+    from django.contrib.auth.models import Permission
+
+    user = get_user_model().objects.create_user("clerk", "c@x.io", "pw", is_staff=True)
+    user.user_permissions.add(*Permission.objects.filter(codename__in=["view_sales", "change_sales", "view_salesitem"]))
+    client.force_login(user)
+    item = sale.items.order_by("pk").first()
+    for rows, message in [
+        ([{"product": "Milk", "quantity": 1, "price": "5.00"}], "You may not add rows to this inline."),
+        ([{"pk": item.pk, "quantity": 7}], "You may not change rows of this inline."),
+        ([{"pk": item.pk, "_delete": True}], "You may not delete rows of this inline."),
+    ]:
+        resp = client.patch(
+            obj_url(sale), data=json.dumps({"inlines": {"items": rows}}), content_type="application/json"
+        )
+        assert resp.status_code == 400, rows
+        assert message in resp.content.decode()
+    assert sale.items.count() == 2
+    item.refresh_from_db()
+    assert item.quantity == 1
