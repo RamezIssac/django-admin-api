@@ -57,7 +57,7 @@ def test_initialize(client, token):
 
 def test_tools_list(client, token):
     tools = {t["name"]: t for t in rpc(client, token, "tools/list", {})["result"]["tools"]}
-    assert len(tools) == 8
+    assert len(tools) == 11  # 9 generic + 2 views published with mcp_tool=
     assert tools["list_models"]["annotations"]["readOnlyHint"] is True
     assert tools["delete_object"]["annotations"]["destructiveHint"] is True
     assert tools["create_object"]["inputSchema"]["required"] == ["model", "data"]

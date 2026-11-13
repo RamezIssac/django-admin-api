@@ -15,3 +15,21 @@ def check_middleware(app_configs=None, **kwargs):
             )
         ]
     return []
+
+
+@checks.register(checks.Tags.urls)
+def check_mcp_view_tools(app_configs=None, **kwargs):
+    """Names of the views published as MCP tools (``mcp_tool=``) must be unique per MCP site."""
+    from django.core.exceptions import ImproperlyConfigured
+    from django.urls import get_resolver
+
+    get_resolver().url_patterns  # noqa: B018  (import the URLconf, which creates the sites)
+    from .mcp.sites import all_mcp_sites
+
+    errors = []
+    for site in all_mcp_sites():
+        try:
+            site.get_tools()
+        except ImproperlyConfigured as exc:
+            errors.append(checks.Error(str(exc), obj=site, id="admin_api.E002"))
+    return errors

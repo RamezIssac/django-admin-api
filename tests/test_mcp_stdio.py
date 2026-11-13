@@ -44,7 +44,7 @@ def test_stdio_server_in_process(superuser, mode):
         return tools, listed, dry, real
 
     tools, listed, dry, real = run(server, steps, mode)
-    assert len(tools.tools) == 8
+    assert len(tools.tools) == 11
     assert "testapp.sales" in {m["model"] for m in listed.structured_content["models"]}
     assert dry.structured_content["valid"] is True and not dry.is_error
     assert real.structured_content["object"]["slug"] == "S-1"
