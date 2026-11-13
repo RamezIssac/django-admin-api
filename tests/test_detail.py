@@ -40,6 +40,7 @@ class TestDetail:
         status, body = api("get", url(sale))
         assert status == 200
         items = body.pop("inlines")["items"]
+        assert body.pop("views") == {"post": f"/api/v1/testapp/sales/{sale.pk}/views/post/"}
         assert body == {
             "pk": sale.pk,
             "str": "S-1",

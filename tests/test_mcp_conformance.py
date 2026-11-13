@@ -57,6 +57,12 @@ async def scenario(client, customer_pk) -> dict:
         "list_objects", {"model": "testapp.sales", "filters": {"status__exact": "draft"}, "ordering": ["-slug"]}
     )
     seen["listed"] = [row[1] for row in listed.structured_content["rows"]]
+
+    # custom views: one published as its own tool, one through run_view (dry run)
+    statement = await client.call_tool("client_statement", {"pk": customer_pk, "status": "draft"})
+    seen["statement_total"] = statement.structured_content["result"]["total"]
+    post = await client.call_tool("run_view", {"model": "testapp.sales", "view": "post", "pk": pk, "dry_run": True})
+    seen["view_dry_run"] = (post.structured_content["dry_run"], post.structured_content["result"]["status"])
     action = await client.call_tool("run_action", {"model": "testapp.sales", "action": "mark_posted", "pks": [pk]})
     seen["action"] = action.structured_content["messages"]
 
@@ -69,13 +75,16 @@ async def scenario(client, customer_pk) -> dict:
 
 EXPECTED = {
     "tools": [
+        "client_statement",
         "create_object",
         "delete_object",
         "describe_model",
         "get_object",
         "list_models",
         "list_objects",
+        "post_sale",
         "run_action",
+        "run_view",
         "update_object",
     ],
     "models": ["testapp.client", "testapp.sales"],
@@ -84,6 +93,8 @@ EXPECTED = {
     "invalid": (True, ["Slug must start with S-."]),
     "value_after_update": "10.00",  # SalesAdmin.save_related: 4 x 2.50
     "listed": ["S-1"],
+    "statement_total": "10.00",
+    "view_dry_run": (True, "posted"),  # rolled back: mark_posted below still finds a draft
     "action": [{"level": "info", "text": "1 posted."}],
     "preview_deleted": False,
     "deleted": True,

@@ -172,6 +172,7 @@ class AdminApiSite:
 
     def get_urls(self):
         from .views.changelist import ActionView, ChangeListView, SchemaView
+        from .views.custom import CustomViewView
         from .views.detail import DeletePreviewView, ObjectView
         from .views.nested import NESTED_METHODS, nested_view
         from .views.registry import RegistryView
@@ -190,6 +191,16 @@ class AdminApiSite:
                 f"{model}actions/<str:action_name>/",
                 self.api_view(ActionView.as_view(api_site=self), methods=("POST",)),
                 name="action",
+            ),
+            path(
+                f"{model}views/<str:view_name>/",
+                self.api_view(CustomViewView.as_view(api_site=self), methods=("GET", "POST")),
+                name="view",
+            ),
+            path(
+                f"{model}<str:object_id>/views/<str:view_name>/",
+                self.api_view(CustomViewView.as_view(api_site=self), methods=("GET", "POST")),
+                name="object_view",
             ),
             path(
                 f"{model}<str:object_id>/",

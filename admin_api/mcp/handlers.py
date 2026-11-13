@@ -12,7 +12,7 @@ from django.contrib.admin.views.main import ORDER_VAR, PAGE_VAR, SEARCH_VAR
 from django.db import router, transaction
 from django.http import QueryDict
 
-from .. import services
+from .. import custom_views, services
 from ..changelist import PER_PAGE_PARAM, SHAPE_PARAM, describe_columns, get_columns
 from ..errors import ApiError, NotFound, PermissionDeniedError
 from ..nested import ModelPath
@@ -148,6 +148,57 @@ def _dry_run(model_admin, request, fn) -> dict:
     return out
 
 
+def _views(site, request, model_admin) -> list:
+    """The custom views of ``model_admin`` the user may run through this MCP site."""
+    return [
+        spec
+        for spec in custom_views.available_views(model_admin, request, mcp=True, read_only=site.read_only)
+        if site.is_view_exposed(model_admin, spec)
+    ]
+
+
+def _view_summary(spec) -> dict:
+    out = {"name": spec.name, "description": spec.description or spec.title, "detail": spec.detail}
+    if spec.writes:
+        out["writes"] = True
+    if spec.mcp_tool:
+        out["mcp_tool"] = spec.mcp_tool
+    return out
+
+
+def _describe_view(spec) -> dict:
+    out = spec.describe()
+    out.pop("permissions", None)
+    if not spec.mcp_tool:
+        out.pop("mcp_tool", None)
+    return out
+
+
+def execute_view(site, request, model_admin, name, *, pk=None, params=None, dry_run=False) -> dict:
+    """Run a custom view for MCP (``run_view`` and the promoted view tools)."""
+    spec = custom_views.get_view(model_admin, request, name, mcp=True, read_only=site.read_only)
+    if not site.is_view_exposed(model_admin, spec):
+        raise NotFound(f"No view {name!r}.")
+    if params is not None and not isinstance(params, dict):
+        raise InvalidArguments("'params' must be an object.")
+
+    def run():
+        return services.run_view(model_admin, request, name, object_id=pk, data=params or {})
+
+    if not dry_run:
+        return run()
+    if not spec.writes:
+        return {**run(), "dry_run": True, "note": "A read-only view; nothing to roll back."}
+    request.is_dry_run = True
+    try:
+        with transaction.atomic(using=router.db_for_write(model_admin.model)):
+            out = {**run(), "dry_run": True, "note": "Nothing was saved: the view ran and was rolled back."}
+            transaction.set_rollback(True)
+    finally:
+        request.is_dry_run = False
+    return out
+
+
 # --------------------------------------------------------------------------------------------
 # handlers
 # --------------------------------------------------------------------------------------------
@@ -172,6 +223,10 @@ def list_models(site, request, args) -> dict:
             description = site.get_model_description(chain[-1], request)
             if description:
                 item["description"] = description
+            if chain[-1].has_view_or_change_permission(request):
+                views = _views(site, request, chain[-1])
+                if views:
+                    item["views"] = [_view_summary(spec) for spec in views]
             models.append(item)
     return {"models": models}
 
@@ -224,6 +279,12 @@ def describe_model(site, request, args) -> dict:
     else:
         out["actions"] = schema["actions"]
         out["input_schema"] = input_schemas(model_admin, request, instance)
+    views = _views(site, request, model_admin)
+    if instance is not None:
+        views = [
+            v for v in views if not v.detail or custom_views.has_view_permission(model_admin, request, v, instance)
+        ]
+    out["views"] = [_describe_view(spec) for spec in views]
     return out
 
 
@@ -258,6 +319,17 @@ def get_object(site, request, args) -> dict:
     children = _children(site, request, model_admin, data["pk"])
     if children:
         data["children"] = {c["segment"]: {"model": c["model"], "parents": c["parents"]} for c in children}
+    # REST gives urls; MCP gives the names of the detail views (run them with run_view)
+    declared = custom_views.declared_views(model_admin)
+    views = [
+        name
+        for name in data.pop("views", {})
+        if declared[name].mcp_enabled
+        and not (site.read_only and declared[name].writes)
+        and site.is_view_exposed(model_admin, declared[name])
+    ]
+    if views:
+        data["views"] = views
     return data
 
 
@@ -309,6 +381,19 @@ def run_action(site, request, args) -> dict:
     else:
         payload["pks"] = _arg(args, "pks", list, required=False, default=[])
     return services.run_action(model_admin, _with_query(request, _filters_query(args)), action, payload)
+
+
+def run_view(site, request, args) -> dict:
+    model_admin, _label = _model_admin(site, request, args)
+    return execute_view(
+        site,
+        request,
+        model_admin,
+        _arg(args, "view", str),
+        pk=_arg(args, "pk", (int, str), required=False),
+        params=_arg(args, "params", dict, required=False, default={}),
+        dry_run=_arg(args, "dry_run", bool, required=False, default=False),
+    )
 
 
 # --------------------------------------------------------------------------------------------
@@ -440,4 +525,75 @@ TOOLS = [
         writes=True,
         annotations={"readOnlyHint": False, "destructiveHint": True, "openWorldHint": False},
     ),
+    ToolSpec(
+        name="run_view",
+        title="Run a custom view",
+        description="Run one of a model's custom views: reports, statements, computed pages or business "
+        "operations. They are listed under 'views' by list_models (names) and describe_model (parameters as "
+        "params_schema). Views with detail=true run on one object (give pk). Views with writes=true change "
+        "data: use dry_run=true first to check them.",
+        input_schema=obj(
+            {
+                "model": MODEL_ARG,
+                "parents": PARENTS_ARG,
+                "view": {"type": "string", "description": "View name from list_models / describe_model."},
+                "pk": {**PK_ARG, "description": "The object, for views with detail=true."},
+                "params": {"type": "object", "description": "Parameters matching the view's params_schema."},
+                "dry_run": {
+                    **DRY_RUN_ARG,
+                    "description": "For views with writes=true: run the view, then roll everything back.",
+                },
+            },
+            ["model", "view"],
+        ),
+        output_schema=ANY_OBJECT,
+        handler=run_view,
+        # stays on read-only sites, where write views are hidden and refused
+        annotations={"readOnlyHint": False, "destructiveHint": True, "openWorldHint": False},
+    ),
 ]
+
+
+def view_tool(site, model_admin, spec) -> ToolSpec:
+    """A view published as its own tool (``@admin_api.view(mcp_tool="name")``). Its parameters
+    are flattened next to ``pk`` (detail views) and ``dry_run`` (write views)."""
+    opts = model_admin.model._meta
+    label = f"{opts.app_label}.{opts.model_name}"
+    params = spec.params_schema()
+    properties = {}
+    required = list(params.get("required", ()))
+    if spec.detail:
+        properties["pk"] = {**PK_ARG, "description": f"Primary key of the {opts.verbose_name}."}
+        required.insert(0, "pk")
+    properties.update(params["properties"])
+    if spec.writes:
+        properties["dry_run"] = DRY_RUN_ARG
+    description = spec.description or spec.title
+    description += f" (Custom view {spec.name!r} of {label}; same as run_view.)"
+
+    def handler(site, request, args):
+        model_admin = services.get_model_admin_by_label(site.api_site, request, label)
+        if not site.is_exposed(model_admin):
+            raise NotFound(f"No MCP access to {label}.")
+        params = {k: v for k, v in args.items() if k not in custom_views.TOOL_RESERVED}
+        return execute_view(
+            site,
+            request,
+            model_admin,
+            spec.name,
+            pk=args.get("pk") if spec.detail else None,
+            params=params,
+            dry_run=bool(args.get("dry_run")) if spec.writes else False,
+        )
+
+    annotations = {"readOnlyHint": False, "destructiveHint": True, "openWorldHint": False} if spec.writes else READ
+    return ToolSpec(
+        name=spec.mcp_tool,
+        title=spec.title,
+        description=description,
+        input_schema=obj(properties, required),
+        output_schema=ANY_OBJECT,
+        handler=handler,
+        writes=spec.writes,
+        annotations=annotations,
+    )
