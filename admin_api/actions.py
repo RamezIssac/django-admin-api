@@ -21,10 +21,11 @@ from django.core.exceptions import PermissionDenied
 from django.db import router, transaction
 from django.http import HttpResponseBase, QueryDict
 
+from . import scopes
 from .changelist import build_changelist, get_columns, split_api_params
 from .encoders import encode_value
 from .errors import ApiError, NotFound, PermissionDeniedError
-from .writes import as_post_request, parse_json_body
+from .writes import InvalidJson, as_post_request
 
 
 class ActionNotSupported(ApiError):
@@ -57,12 +58,16 @@ def describe_actions(model_admin, request) -> list[dict]:
     return out
 
 
-def run_action(model_admin, request, name) -> dict:
-    payload = parse_json_body(request)
+def run_action(model_admin, request, name, payload: dict) -> dict:
+    if not isinstance(payload, dict):
+        raise InvalidJson("The action payload must be an object.")
     actions = model_admin.get_actions(request)
     if name not in actions:
         raise NotFound(f"No action {name!r} (or no permission).")
     func, name, _description = action_parts(actions[name])
+    for perm in getattr(func, "allowed_permissions", ()):
+        if perm in scopes.OPS:  # custom permissions are left to has_<perm>_permission
+            scopes.check(request, model_admin.opts, perm)
 
     select_all = bool(payload.get("all"))
     pks = payload.get("pks") or []

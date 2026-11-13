@@ -4,7 +4,8 @@
 > **without a second admin class**. The `ModelAdmin` stays the single source of truth;
 > the API differs from the HTML admin only where you write an `api_` twin.
 
-Status: design, round 2 answers incorporated. Package: `admin_api`. Repo: `django-admin-api/`.
+Status: REST API built (milestones 1–8), MCP add-on built (milestones 9–15, §14).
+Package: `admin_api`. Repo: `django-admin-api/`.
 
 ---
 
@@ -457,19 +458,15 @@ class ApiToken(models.Model):
     expires_at = DateTimeField(null=True, blank=True)
     last_used_at = DateTimeField(null=True, blank=True)  # throttled update
     revoked_at = DateTimeField(null=True, blank=True)
-    # --- reserved for later, present from day one so no data migration is needed ---
-    scopes = JSONField(default=list, blank=True)  # [] = full user permissions (v1)
+    scopes = JSONField(default=list, blank=True)  # [] = full user permissions; see 9.3
     kind = CharField(default="pat", max_length=20)  # "pat" | "mcp" | "service"
 ```
 
 Header: `Authorization: Bearer aapi_<prefix>_<secret>`.
 
 **Planned expansion:**
-1. **Scopes** (v2): `has_*_permission` stays the ceiling. Scopes can only *narrow* it, e.g.
-   `["store.view_sales", "store.*:read"]`. Enforcement adds one check in the view layer.
-   `scopes=[]` keeps today's meaning.
-2. **MCP tokens** (with MCP): `kind="mcp"` tokens are issued for stdio `mcp_serve --token`
-   and shown with their own admin filter.
+1. **Scopes (built, §9.3).**
+2. **MCP tokens (built):** `kind="mcp"` tokens for MCP clients, filterable in the token admin.
 3. **OAuth 2.1** (with remote MCP): a separate authenticator backed by django-oauth-toolkit.
    `ApiToken` is untouched, and OAuth access tokens map to the same user and scopes model.
 4. **Swappable model (built):** `ApiToken.Meta.swappable = "ADMIN_API_TOKEN_MODEL"` with an
@@ -483,8 +480,30 @@ Header: `Authorization: Bearer aapi_<prefix>_<secret>`.
   (`register_token_admin=True`), and never exposed through the API itself (`api_enabled = False`).
   On add, the raw token is shown once in a warning message. Staff users see only their own
   tokens, and a "Revoke selected tokens" action is provided.
-- `manage.py create_api_token <username> [--name] [--kind pat|mcp|service] [--expires-days N]`
-  prints a raw token (for CI or MCP clients).
+- `manage.py create_api_token <username> [--name] [--kind pat|mcp|service] [--expires-days N]
+  [--scope S ...]` prints a raw token (for CI or MCP clients).
+
+### 9.3 Token scopes (milestone 10, as built)
+
+A scope is `"<app_label>.<model_name>:<op>"`, `op ∈ {view, add, change, delete}`, `*` allowed in
+any part: `store.sales:view`, `store.*:view`, `cash.*:*`. `scopes = []` means the user's full
+permissions. Scopes only **narrow**: `has_*_permission` stays the ceiling. As in Django,
+`change` implies `view`.
+
+- **Enforcement** in `ApiAdminMixin.has_{view,add,change,delete}_permission` (AND with the
+  scopes when `request.api_token` is set). Every API request goes through the mixin, so the
+  registry perms, `/schema/`, actions' `allowed_permissions` and the changelist follow.
+- **Inlines** are separate `InlineModelAdmin` instances, not covered by the mixin: for scoped
+  requests `get_inlines` returns cached `Scoped<Inline>` subclasses whose `has_*_permission`
+  check the inline model's own scope (auto-created M2M inlines use the parent's).
+- **Second line of defense** in `admin_api.services` (lookup, create, update, delete,
+  delete-preview) and actions, for admins that override `has_*_permission` without `super()`.
+- Edited as a textarea in `ApiTokenAdmin` (the model field stays `editable=False`, so no
+  migration) and with `create_api_token --scope`.
+
+Related fix (milestone 10): inline rows the user may not add, change or delete are **rejected**
+with a 400 row error. Django's inline forms (`DeleteProtectedModelForm.has_changed`) silently
+ignore them, so the API used to answer 200 for changes it did not make.
 
 ---
 
@@ -494,8 +513,10 @@ Header: `Authorization: Bearer aapi_<prefix>_<secret>`.
 |---|---|
 | Custom admin views (`view_view`, `get_by_slug`) | `@admin_api.view` decorator name reserved |
 | slick_reporting reports | `/api/v1/reports/<slug>/` path reserved |
-| MCP server | `/mcp/` mount + `manage.py mcp_serve`. Thin gate over the same views. Tool design deferred |
-| JSON Schema / OpenAPI generation | `/schema/` is the seed. Formal schemas come with MCP |
+| MCP server | **built** (§14) |
+| JSON Schema | **built**: `/schema/` → `input_schema` (§14.4) |
+| OpenAPI document | — |
+| OAuth 2.1 (remote MCP connectors) | separate authenticator (django-oauth-toolkit); `AdminMcpSite.authenticators` |
 | `list_editable` bulk edit | — |
 | Async views | — |
 
@@ -529,12 +550,23 @@ Header: `Authorization: Bearer aapi_<prefix>_<secret>`.
 **Status: all 8 done.** Commits: django-admin-api `a67d75c…`; django-erp-framework `e1a9766`
 (process_changeform refactor) and `259c3f7` (`erp_framework.api`).
 
-### Next (not in the prototype)
+Phase 2 (MCP), one commit each:
 
-- MCP: `/mcp/` (Streamable HTTP) + `manage.py mcp_serve` as a thin gate over these views.
-  Tool catalogue and JSON Schema to be designed (decisions 18–20 deferred).
-- slick_reporting reports at `/api/v1/reports/<slug>/`.
-- Token scopes (narrowing only), OAuth 2.1 with MCP.
+9. Service layer: views → `admin_api.services` (`(request, …) → dict`).
+10. Token scopes (§9.3).
+11. JSON Schema for write payloads (§14.4).
+12. MCP tool layer, SDK-free (§14.2–14.3).
+13. Streamable HTTP `/mcp/` on the official SDK (§14.5).
+14. stdio `manage.py mcp_serve` (§14.6).
+15. Conformance with the official client + version matrix (§14.7).
+16. erp_framework: `erp_framework.api.erp_mcp_site`, `changeform_saved` now sends `request`
+    (so receivers can check `is_dry_run`); ra_erp MCP smoke test. django-erp-framework PR #55
+    (`feature/admin-api`, with the two phase-1 commits rebased onto `develop`).
+
+### Next
+
+- slick_reporting reports at `/api/v1/reports/<slug>/` + a `run_report` tool.
+- OAuth 2.1 for remote MCP connectors.
 - File uploads (multipart) on writes; generic inlines on writes; `list_editable` bulk edit.
 - Final PyPI distribution name (`django-admin-api` is taken).
 
@@ -568,3 +600,101 @@ Header: `Authorization: Bearer aapi_<prefix>_<secret>`.
    `get_X` override sits *above* the mixin and wraps the twin's result when it calls `super()`.
    With the runtime subclass, the mixin sits above your class, so a twin replaces your `get_X`
    for API requests. Both follow the lookup order: a twin beats `get_X`.
+
+---
+
+## 14. MCP (milestones 9–15, as built)
+
+Decisions (phase 2): both transports; the official `mcp` SDK as an optional `[mcp]` extra,
+bridged into a sync Django view; 8 generic tools; permissions as the ceiling plus `dry_run`,
+delete `confirm` and a site-level `read_only`; no `mcp_` twin chain; API tokens only (OAuth
+later); scopes now; JSON Schema + `structuredContent`.
+
+### 14.1 Layers
+
+| Layer | Module | Imports the SDK |
+|---|---|---|
+| Services: `(request, …) → dict`, shared with the REST views | `admin_api.services` | no |
+| Tools: `ToolSpec`, 8 handlers, `AdminMcpSite` | `admin_api.mcp.{tools,handlers,sites}` | no |
+| Glue: SDK `Server`, Django ⇄ ASGI bridge, view, stdio | `admin_api.mcp.{server,bridge,views,stdio}` | **yes** |
+
+`admin_api.mcp` imports without the SDK (so `erp_framework` can define a site
+unconditionally); `mcp_site.urls` and `mcp_serve` raise `ImproperlyConfigured` with the install
+hint when it is missing. (The planned system check W002 was dropped: the URLconf already fails
+loudly.)
+
+```python
+# pip install "django-admin-api[mcp]"      (mcp>=2.3,<3)
+from admin_api.mcp import AdminMcpSite
+
+mcp_site = AdminMcpSite(api_site)            # read_only=False, server_name=…, instructions=…
+urlpatterns += [path("mcp/", mcp_site.urls)]
+```
+
+### 14.2 Tools
+
+| Tool | Arguments | Backed by |
+|---|---|---|
+| `list_models` | – | `services.registry` + `mcp_description` |
+| `describe_model` | `model`, `pk?` | `services.schema` + `input_schemas` (per object with `pk`) |
+| `list_objects` | `model`, `filters{}`, `search`, `ordering[]`, `page`, `per_page` | `services.changelist`, always columnar, 25/page default |
+| `get_object` | `model`, `pk` | `services.detail` |
+| `create_object` | `model`, `data`, `dry_run` | `services.create` |
+| `update_object` | `model`, `pk`, `data`, `dry_run` | `services.update(partial=True)` |
+| `delete_object` | `model`, `pk`, `confirm` | preview unless `confirm` |
+| `run_action` | `model`, `action`, `pks[]` or `all` + `filters{}` | `services.run_action` (no dry run) |
+
+- `model` is `"app_label.model_name"`. `ordering` takes column names (`"-date"`), translated to
+  the admin's `o=` indexes; `filters` are the admin's own changelist parameters, as listed by
+  `describe_model` (`filters[].choices[].params`).
+- Errors are `isError` results carrying the REST envelope plus `status`. An invalid **dry run**
+  is a normal result (`{"dry_run": true, "valid": false, "errors": …}`).
+- Annotations: reads are `readOnlyHint`; update/delete/actions `destructiveHint`.
+
+### 14.3 Admin and request hooks
+
+- `mcp_enabled = False` hides an admin from MCP only. `AdminMcpSite.is_exposed()` for site rules.
+- `mcp_description` (str or `callable(request)`) is shown to the LLM in `list_models` and
+  `describe_model`.
+- `request.is_mcp` (MCP requests are also `is_api`, so all `api_` twins apply).
+- `request.is_dry_run`: during a dry run the whole pipeline runs (hooks, signals, `LogEntry`,
+  reversion) inside `atomic()` and is rolled back; `transaction.on_commit` callbacks are
+  discarded. **Non-DB side effects in hooks still happen**: put them in `on_commit`, or skip
+  them when `request.is_dry_run`.
+- `ApiRequestMiddleware` sets `is_api`, `is_mcp` and `is_dry_run` to `False` on every request.
+
+### 14.4 JSON Schema
+
+`admin_api.jsonschema.input_schemas(model_admin, request, obj=None)` → `{"create", "update"}`
+(draft 2020-12, `null` when not permitted), generated from `get_form()` and the inline
+formsets, so readonly fields and `api_` twins apply. Create: required = form-required fields
+**without an initial value** (the API fills those in; given as `default`). Update: PATCH
+semantics; inline rows may carry `pk` and `_delete`. Relations as pk with `x-related-model`;
+decimals as string or number; choices as `enum`; file fields omitted. Also on `/schema/` as
+`input_schema`.
+
+### 14.5 Streamable HTTP (`/mcp/`)
+
+Stateless, JSON responses (no SSE, no sessions). In the Django view, **before** the SDK:
+POST only (GET/DELETE → 405); `Origin` must be the request host or in `CSRF_TRUSTED_ORIGINS`
+(DNS-rebinding rule of the spec); `AdminMcpSite.authenticators` (default: Bearer API token
+only; a session is not enough) → 401 with `WWW-Authenticate`; `api_site.has_permission`. Then
+`async_to_sync(bridge.handle)`: a fresh stateless `StreamableHTTPSessionManager` per request, a
+hand-built ASGI scope, and the Django request in a contextvar. Tool calls run via
+`sync_to_async(thread_sensitive=True)`, i.e. back on the view's thread and DB connection, so
+transactions behave as in a normal view. Works under WSGI and ASGI.
+
+### 14.6 stdio (`manage.py mcp_serve`)
+
+`--token` or `$ADMIN_API_TOKEN`; `--user` only with `DEBUG`; `--site dotted.path` (default: the
+only `AdminMcpSite` the URLconf creates). One synthetic request per message: the token is looked
+up on every call (revocation is immediate, scopes apply), `close_old_connections()`, in-memory
+message capture. The SDK diverts stray stdout to stderr while serving.
+
+### 14.7 Tests
+
+`tests/test_mcp_tools.py` (handlers via `call_tool`), `test_mcp_http.py` (raw JSON-RPC through
+the test client, gatekeeping, ASGI), `test_mcp_stdio.py` (official client in-process, CLI),
+`test_mcp_conformance.py` (official client vs. live HTTP server and a real `mcp_serve`
+subprocess, in both the 2025-11-25 handshake era and the 2026-07-28 stateless era).
+`scripts/matrix.sh`: Django 4.2 / 5.2 / 6.1 × `mcp` 2.3.0 / latest `<3`.

@@ -1,6 +1,6 @@
 # admin_api
 
-A thin layer that makes Django `ModelAdmin` API-ready, and later MCP-ready.
+A thin layer that makes Django `ModelAdmin` API-ready and MCP-ready.
 
 The same `ModelAdmin` drives the HTML admin and the JSON API. Where the API should behave
 differently, write an `api_` twin:
@@ -33,7 +33,8 @@ api_site = AdminApiSite(admin_site=admin.site)
 urlpatterns += [path("api/", api_site.urls)]  # → /api/v1/
 ```
 
-Status: **working prototype** (all 8 milestones). Tested on Django 4.2, 5.2 and 6.1.
+Status: **working prototype**: REST API (milestones 1–8) and MCP add-on (9–15). Tested on
+Django 4.2, 5.2 and 6.1.
 The mixin is optional: admins without it are wrapped at runtime for API requests.
 
 ### With erp_framework
@@ -53,7 +54,7 @@ lines.
 |---|---|
 | `GET /api/v1/` | apps/models the user may use, with permissions |
 | `GET /api/v1/<app>/<model>/` | changelist: admin filters (`?status__exact=`), search `?q=`, ordering `?o=`, page `?p=`, `_per_page`, `_shape=columnar` |
-| `GET /api/v1/<app>/<model>/schema/` | columns, filters with their params, search, ordering, pagination |
+| `GET /api/v1/<app>/<model>/schema/` | columns, filters with their params, search, ordering, pagination, actions, `input_schema` (JSON Schema for create/update) |
 | `POST /api/v1/<app>/<model>/` | create, through the admin form + inline formsets |
 | `GET /api/v1/<app>/<model>/<pk>/` | detail: fieldsets (or `api_detail_fields`) + inlines |
 | `PATCH`/`PUT /api/v1/<app>/<model>/<pk>/` | update; `{"inlines": {"items": [{"pk": 1, "quantity": 2}, {"pk": 2, "_delete": true}, {...new}]}}` |
@@ -67,12 +68,51 @@ Design: [docs/DESIGN.md](docs/DESIGN.md).
 * **Session**: same login as the admin. CSRF is enforced on unsafe methods.
 * **Personal access tokens**: `Authorization: Bearer aapi_<prefix>_<secret>`. Create them in the
   admin ("API tokens", registered on the wrapped site) or with
-  `manage.py create_api_token <username> --name ci`. Only a hash is stored. A token has exactly
-  the permissions of its user.
+  `manage.py create_api_token <username> --name ci`. Only a hash is stored. A token has the
+  permissions of its user, optionally **narrowed by scopes**:
+  `--scope store.sales:view --scope 'cash.*:*'` (`<app>.<model>:<view|add|change|delete>`, `*`
+  allowed). Scopes never grant more than the user has.
+
+## MCP
+
+Let an AI agent (Claude Code, Claude Desktop, any MCP client) use the admin, with the same
+permissions, validation, ERP hooks and audit trail as the HTML admin.
+
+```bash
+pip install "django-admin-api[mcp]"     # the official MCP SDK; the REST API doesn't need it
+```
+
+```python
+# urls.py
+from admin_api.mcp import AdminMcpSite
+
+mcp_site = AdminMcpSite(api_site)            # AdminMcpSite(api_site, read_only=True) for reads only
+urlpatterns += [path("mcp/", mcp_site.urls)]  # Streamable HTTP
+```
+
+```bash
+# a token for the agent (scopes recommended)
+python manage.py create_api_token alice --kind mcp --name claude --scope 'store.*:view'
+
+# local, stdio
+claude mcp add erp -e ADMIN_API_TOKEN=aapi_… -- python manage.py mcp_serve
+# remote, HTTP
+claude mcp add --transport http erp https://erp.example.com/mcp/ --header "Authorization: Bearer aapi_…"
+```
+
+Tools: `list_models`, `describe_model` (columns, filters, actions, JSON Schema),
+`list_objects` (admin filters, search, ordering, paging), `get_object`, `create_object` /
+`update_object` (with `dry_run`: the full save pipeline, then rolled back), `delete_object`
+(preview unless `confirm=true`), `run_action`.
+
+On the admin: `mcp_description = "…"` (context for the LLM), `mcp_enabled = False` (hide from
+MCP only). In hooks: `request.is_mcp`, and `request.is_dry_run` to skip side effects such as
+e-mails during a dry run (or use `transaction.on_commit`, which a dry run discards).
 
 ## Development
 
 ```bash
 uv sync
-uv run pytest
+uv run pytest                    # everything; -m "not conformance" skips the live-server/subprocess tests
+scripts/matrix.sh                # Django 4.2 / 5.2 / 6.1 x mcp 2.3.0 / latest
 ```

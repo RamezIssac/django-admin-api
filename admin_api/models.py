@@ -24,8 +24,14 @@ def hash_secret(secret: str) -> str:
 
 class ApiTokenManager(models.Manager):
     def create_token(self, user, name, *, expires_at=None, kind="pat", scopes=None):
-        """Create a token. Returns ``(token, raw)``; ``raw`` is not stored anywhere."""
-        token = self.model(user=user, name=name, expires_at=expires_at, kind=kind, scopes=scopes or [])
+        """Create a token. Returns ``(token, raw)``; ``raw`` is not stored anywhere.
+
+        ``scopes`` (see :mod:`admin_api.scopes`) narrow the user's permissions; ``[]`` = full.
+        Raises ``ValidationError`` for an invalid scope.
+        """
+        from .scopes import normalize_scopes
+
+        token = self.model(user=user, name=name, expires_at=expires_at, kind=kind, scopes=normalize_scopes(scopes))
         raw = token.set_new_secret()
         token.save()
         return token, raw
@@ -56,8 +62,8 @@ class AbstractApiToken(models.Model):
     expires_at = models.DateTimeField(_("expires at"), null=True, blank=True)
     last_used_at = models.DateTimeField(_("last used at"), null=True, blank=True, editable=False)
     revoked_at = models.DateTimeField(_("revoked at"), null=True, blank=True, editable=False)
-    # Reserved for later; present from day one so no data migration is needed.
-    # scopes = [] means "the user's full admin permissions" (v1). Scopes will only narrow.
+    # scopes = [] means "the user's full admin permissions". Scopes only narrow; see admin_api.scopes.
+    # Edited through ApiTokenAdmin's form field (editable=False keeps the original migration).
     scopes = models.JSONField(default=list, blank=True, editable=False)
     kind = models.CharField(_("kind"), max_length=20, choices=KIND_CHOICES, default="pat")
 
