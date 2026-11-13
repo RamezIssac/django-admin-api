@@ -12,9 +12,14 @@ from ..writes import parse_json_body
 
 class ModelApiView(View):
     api_site = None
+    # nested admins (admin_api.views.nested): child segments and the parent pks, one per level
+    segments: tuple = ()
+    parents: tuple = ()
 
     def get_model_admin(self, request, app_label, model_name):
-        return services.get_model_admin(self.api_site, request, app_label, model_name)
+        return services.get_model_admin(
+            self.api_site, request, app_label, model_name, segments=self.segments, parents=self.parents
+        )
 
 
 class ChangeListView(ModelApiView):

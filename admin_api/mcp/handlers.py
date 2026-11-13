@@ -15,6 +15,7 @@ from django.http import QueryDict
 from .. import services
 from ..changelist import PER_PAGE_PARAM, SHAPE_PARAM, describe_columns, get_columns
 from ..errors import ApiError, NotFound, PermissionDeniedError
+from ..nested import ModelPath
 from ..writes import ValidationFailed
 from .tools import (
     ANY_OBJECT,
@@ -22,6 +23,7 @@ from .tools import (
     DRY_RUN_ARG,
     FILTERS_ARG,
     MODEL_ARG,
+    PARENTS_ARG,
     PK_ARG,
     ToolSpec,
     obj,
@@ -50,15 +52,21 @@ def _arg(args: dict, name: str, types=None, *, required=True, default=None):
 
 
 def _model_admin(site, request, args):
-    label = _arg(args, "model", str)
-    model_admin = services.get_model_admin_by_label(site.api_site, request, label)
-    if not site.is_exposed(model_admin):
-        raise NotFound(f"No MCP access to {label}.")
-    return model_admin, label
+    """The admin for ``model`` (a model path) inside ``parents``. Hiding an admin from MCP hides
+    the admins nested under it too."""
+    path = ModelPath.parse(_arg(args, "model", str))
+    parents = _arg(args, "parents", list, required=False, default=[])
+    if any(not isinstance(pk, (int, str)) or isinstance(pk, bool) for pk in parents):
+        raise InvalidArguments("'parents' must be a list of primary keys.")
+    chain = site.api_site.get_admin_chain(path)
+    if chain is not None and not all(site.is_exposed(a) for a in chain):
+        raise NotFound(f"No MCP access to {path.label}.")
+    model_admin = services.get_model_admin_by_label(site.api_site, request, path.label, parents)
+    return model_admin, path.label
 
 
-def _label(model_admin) -> str:
-    return f"{model_admin.opts.app_label}.{model_admin.opts.model_name}"
+def _children(site, request, model_admin, pk=None) -> list[dict]:
+    return [link for link in services.child_links(request, model_admin, pk) if site.is_exposed(link["admin"])]
 
 
 def _with_query(request, query: QueryDict):
@@ -148,17 +156,20 @@ def list_models(site, request, args) -> dict:
     models = []
     for app in data["apps"]:
         for entry in app["models"]:
-            model_admin = site.api_site.get_model_admin(app["app_label"], entry["model"])
-            if model_admin is None or not site.is_exposed(model_admin):
+            path = ModelPath.parse(entry.get("path") or f"{app['app_label']}.{entry['model']}")
+            chain = site.api_site.get_admin_chain(path)
+            if chain is None or not all(site.is_exposed(a) for a in chain):
                 continue
             item = {
-                "model": f"{app['app_label']}.{entry['model']}",
+                "model": path.label,
                 "name": entry["name"],
                 "name_plural": entry["name_plural"],
                 "app": app["name"],
                 "perms": _effective_perms(site, entry["perms"]),
             }
-            description = site.get_model_description(model_admin, request)
+            if path.depth:
+                item["nested_under"] = entry["nested_under"]
+            description = site.get_model_description(chain[-1], request)
             if description:
                 item["description"] = description
             models.append(item)
@@ -199,6 +210,11 @@ def describe_model(site, request, args) -> dict:
         "date_hierarchy": schema["date_hierarchy"],
         "per_page": {"default": site.default_per_page, "max": site.api_site.max_page_size},
     }
+    if "parents" in schema["model"]:
+        out["parents"] = schema["model"]["parents"]
+    children = _children(site, request, model_admin)
+    if children:
+        out["children"] = [{k: c[k] for k in ("model", "name", "name_plural")} for c in children]
     description = site.get_model_description(model_admin, request)
     if description:
         out["description"] = description
@@ -229,12 +245,20 @@ def list_objects(site, request, args) -> dict:
     data = services.changelist(site.api_site, model_admin, _with_query(request, query))
     data.pop("next", None)
     data.pop("previous", None)
-    return {"model": label, **data}
+    head = {"model": label}
+    if request.admin_api_target.parents:
+        head["parents"] = request.admin_api_target.parents
+    return {**head, **data}
 
 
 def get_object(site, request, args) -> dict:
     model_admin, _label = _model_admin(site, request, args)
-    return services.detail(model_admin, request, _arg(args, "pk", (int, str)))
+    data = services.detail(model_admin, request, _arg(args, "pk", (int, str)))
+    data.pop("children", None)  # REST urls; MCP addresses children by model path + parents
+    children = _children(site, request, model_admin, data["pk"])
+    if children:
+        data["children"] = {c["segment"]: {"model": c["model"], "parents": c["parents"]} for c in children}
+    return data
 
 
 def create_object(site, request, args) -> dict:
@@ -308,7 +332,7 @@ TOOLS = [
         description="Columns, filters, search, actions and the JSON Schema of the data accepted by "
         "create_object/update_object. Call this before listing with filters or writing. Pass pk to get the "
         "update schema for one object (some fields may be read-only per object).",
-        input_schema=obj({"model": MODEL_ARG, "pk": PK_ARG}, ["model"]),
+        input_schema=obj({"model": MODEL_ARG, "parents": PARENTS_ARG, "pk": PK_ARG}, ["model"]),
         output_schema=ANY_OBJECT,
         handler=describe_model,
         annotations=READ,
@@ -321,6 +345,7 @@ TOOLS = [
         input_schema=obj(
             {
                 "model": MODEL_ARG,
+                "parents": PARENTS_ARG,
                 "filters": FILTERS_ARG,
                 "search": {"type": "string", "description": "Free-text search (when describe_model says enabled)."},
                 "ordering": {
@@ -341,7 +366,7 @@ TOOLS = [
         name="get_object",
         title="Get one object",
         description="All fields of one object, including its inline rows.",
-        input_schema=obj({"model": MODEL_ARG, "pk": PK_ARG}, ["model", "pk"]),
+        input_schema=obj({"model": MODEL_ARG, "parents": PARENTS_ARG, "pk": PK_ARG}, ["model", "pk"]),
         output_schema=ANY_OBJECT,
         handler=get_object,
         annotations=READ,
@@ -352,7 +377,9 @@ TOOLS = [
         description="Create an object through the admin's own form and save pipeline (same validation and "
         "business rules as the admin). 'data' must match describe_model's input_schema.create. "
         "Use dry_run=true first to check it.",
-        input_schema=obj({"model": MODEL_ARG, "data": DATA_ARG, "dry_run": DRY_RUN_ARG}, ["model", "data"]),
+        input_schema=obj(
+            {"model": MODEL_ARG, "parents": PARENTS_ARG, "data": DATA_ARG, "dry_run": DRY_RUN_ARG}, ["model", "data"]
+        ),
         output_schema=ANY_OBJECT,
         handler=create_object,
         writes=True,
@@ -365,7 +392,8 @@ TOOLS = [
         "'pk' updates that row, '_delete': true deletes it, a row without 'pk' is added. 'data' must match "
         "describe_model's input_schema.update. Use dry_run=true first to check it.",
         input_schema=obj(
-            {"model": MODEL_ARG, "pk": PK_ARG, "data": DATA_ARG, "dry_run": DRY_RUN_ARG}, ["model", "pk", "data"]
+            {"model": MODEL_ARG, "parents": PARENTS_ARG, "pk": PK_ARG, "data": DATA_ARG, "dry_run": DRY_RUN_ARG},
+            ["model", "pk", "data"],
         ),
         output_schema=ANY_OBJECT,
         handler=update_object,
@@ -380,6 +408,7 @@ TOOLS = [
         input_schema=obj(
             {
                 "model": MODEL_ARG,
+                "parents": PARENTS_ARG,
                 "pk": PK_ARG,
                 "confirm": {"type": "boolean", "default": False, "description": "Actually delete."},
             },
@@ -398,6 +427,7 @@ TOOLS = [
         input_schema=obj(
             {
                 "model": MODEL_ARG,
+                "parents": PARENTS_ARG,
                 "action": {"type": "string", "description": "Action name from describe_model's actions."},
                 "pks": {"type": "array", "items": PK_ARG, "description": "Objects to run the action on."},
                 "all": {"type": "boolean", "default": False, "description": "Run on all objects matching filters."},
