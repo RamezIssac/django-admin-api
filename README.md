@@ -1,6 +1,35 @@
-# admin_api
+# django-admin-api2 (import name: `admin_api`)
+
+[![CI](https://github.com/RamezIssac/django-admin-api/actions/workflows/ci.yml/badge.svg)](https://github.com/RamezIssac/django-admin-api/actions/workflows/ci.yml)
+
+**[Design doc](docs/DESIGN.md)** · **[Decision index](docs/DECISIONS.md)** · [Changelog](CHANGELOG.md) · [Releasing](RELEASING.md)
+
+**MCP-ready out of the box.** Turn your existing Django `ModelAdmin`s into a REST API **and** an
+[MCP](https://modelcontextprotocol.io) server for AI agents (Claude Code, Claude Desktop, any MCP
+client) — with the admin's own permissions, validation and audit trail.
+
+```bash
+pip install django-admin-api2          # the REST API
+pip install "django-admin-api2[mcp]"   # + the MCP transports (the official MCP SDK)
+```
+
+> **Why "2"?** The `django-admin-api` name on PyPI is taken by an unrelated, inactive package, so
+> this project is published as **django-admin-api2**. The import package is still `admin_api`
+> (`INSTALLED_APPS += ["admin_api"]`, `import admin_api`). Do not install it alongside the old
+> `django-admin-api` package — the two share the `admin_api` import name.
 
 A thin layer that makes Django `ModelAdmin` API-ready and MCP-ready.
+
+## Design-first, agent-built
+
+The primary artifact of this project is the design: [docs/DESIGN.md](docs/DESIGN.md) records
+the decisions (numbered, with the rejected options), and
+[docs/DECISIONS.md](docs/DECISIONS.md) indexes each one next to the tests that enforce it.
+Most of the implementation was written by AI coding agents — which is exactly why the design
+is the asset: generated code is only as good as the decisions it is steered by and reviewed
+against. The test suite is the executable form of those decisions (HTML-admin parity, query
+budgets, permission matrices, MCP conformance), and releases are where it all comes under
+control ([RELEASING.md](RELEASING.md)).
 
 The same `ModelAdmin` drives the HTML admin and the JSON API. Where the API should behave
 differently, write an `api_` twin:
@@ -33,8 +62,8 @@ api_site = AdminApiSite(admin_site=admin.site)
 urlpatterns += [path("api/", api_site.urls)]  # → /api/v1/
 ```
 
-Status: **working prototype**: REST API (milestones 1–8) and MCP add-on (9–15). Tested on
-Django 4.2, 5.2 and 6.1.
+Status: **alpha** (`0.1.0a1`): REST API (milestones 1–8), MCP add-on (9–15) and custom admin
+views (17–18). Tested on Django 4.2, 5.2 and 6.1.
 The mixin is optional: admins without it are wrapped at runtime for API requests.
 
 ### With erp_framework
@@ -61,6 +90,8 @@ lines.
 | `DELETE /api/v1/<app>/<model>/<pk>/` | `delete_model` + LogEntry; 409 when protected |
 | `GET /api/v1/<app>/<model>/<pk>/delete-preview/` | the admin's delete confirmation data as JSON |
 | `POST /api/v1/<app>/<model>/actions/<name>/` | run an admin action on `{"pks": [...]}` or `{"all": true}` (+ filters); `api_<name>` twin for actions that return files/pages |
+| `GET`/`POST /api/v1/<app>/<model>/views/<name>/` | run a custom view (`@admin_api.view`, below) |
+| `GET`/`POST /api/v1/<app>/<model>/<pk>/views/<name>/` | run a custom view on one object |
 Design: [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Authentication
@@ -79,7 +110,7 @@ Let an AI agent (Claude Code, Claude Desktop, any MCP client) use the admin, wit
 permissions, validation, ERP hooks and audit trail as the HTML admin.
 
 ```bash
-pip install "django-admin-api[mcp]"     # the official MCP SDK; the REST API doesn't need it
+pip install "django-admin-api2[mcp]"    # the official MCP SDK; the REST API doesn't need it
 ```
 
 ```python
@@ -100,19 +131,99 @@ claude mcp add erp -e ADMIN_API_TOKEN=aapi_… -- python manage.py mcp_serve
 claude mcp add --transport http erp https://erp.example.com/mcp/ --header "Authorization: Bearer aapi_…"
 ```
 
-Tools: `list_models`, `describe_model` (columns, filters, actions, JSON Schema),
+Tools: `list_models`, `describe_model` (columns, filters, actions, custom views, JSON Schema),
 `list_objects` (admin filters, search, ordering, paging), `get_object`, `create_object` /
 `update_object` (with `dry_run`: the full save pipeline, then rolled back), `delete_object`
-(preview unless `confirm=true`), `run_action`.
+(preview unless `confirm=true`), `run_action`, `run_view` (custom views), plus one tool per view
+published with `mcp_tool=`.
 
 On the admin: `mcp_description = "…"` (context for the LLM), `mcp_enabled = False` (hide from
 MCP only). In hooks: `request.is_mcp`, and `request.is_dry_run` to skip side effects such as
 e-mails during a dry run (or use `transaction.on_commit`, which a dry run discards).
+
+## Custom views (custom admin pages)
+
+A custom admin page (a statement, a stock balance, "post this invoice") is usually a view added
+with `get_urls()` that computes data and renders a template. Move the computing part into a
+method decorated with `@admin_api.view`. The HTML view keeps calling it, and the REST API and
+MCP expose it with the same permissions:
+
+```python
+class StatementForm(forms.Form):
+    date_from = forms.DateField(required=False)
+    date_to = forms.DateField(required=False)
+
+
+class ClientAdmin(admin.ModelAdmin):
+    @admin_api.view(detail=True, params=StatementForm, mcp_tool="client_statement")
+    def statement(self, request, obj, date_from=None, date_to=None):
+        """Account statement of one client between two dates."""   # the description for the LLM
+        return {"opening": ..., "lines": [...], "closing": ...}     # JSON-able; models/dates/Decimals encoded
+
+    @admin_api.view(detail=True, permissions=["change"], params={"note": {"type": "string"}})
+    def post(self, request, obj, note=""):
+        """Post a draft invoice."""
+        ...
+        self.message_user(request, "Posted.")                       # returned under "messages"
+        return {"status": obj.status}
+
+    def get_urls(self):                                            # the HTML page, unchanged
+        return [path("<pk>/statement/", self.admin_site.admin_view(self.statement_page))] + super().get_urls()
+
+    def statement_page(self, request, pk):
+        obj = self.get_object(request, pk)
+        form = StatementForm(request.GET)
+        form.is_valid()
+        context = {**self.admin_site.each_context(request), **self.statement(request, obj, **form.cleaned_data)}
+        return TemplateResponse(request, "admin/client_statement.html", context)
+```
+
+| Option | |
+|---|---|
+| `detail` | `True`: `method(request, obj, **params)`, at `<pk>/views/<name>/`. `False` (default): `method(request, **params)`, at `views/<name>/` |
+| `params` | a `Form` class (validated; `cleaned_data` passed as arguments; JSON Schema generated from it) or a dict of JSON Schema properties (+ `required=[...]`; `format: date / date-time / time` arrive parsed) |
+| `permissions` | like `@admin.action(permissions=...)`: every `has_<perm>_permission` must pass (`view` = view or change). Default `["view"]` |
+| `writes` | default: `True` when `permissions` asks for more than `view`. Write views are POST only, run in a transaction, need a write token scope, are hidden from read-only MCP sites and support MCP `dry_run`. Read views take GET (query string) or POST (JSON body) |
+| `name`, `title`, `description` | default: method name, derived title, docstring |
+| `mcp_tool="name"` | also publish the view as its own MCP tool (top-level admins) |
+| `api_enabled=False` / `mcp_enabled=False` | hide from both / from MCP only |
+
+The response is `{"view", "pk" (detail), "result", "messages"}`. Errors use the usual envelope:
+`400 invalid_params` (with `fields`), `ValidationError` → `400 validation_failed`,
+`PermissionDenied` → `403`, a returned `HttpResponse` → `400 view_not_supported` (rolled back).
+
+**How an agent finds them.** The MCP server instructions mention custom views; `list_models`
+lists each model's views (name, description, `detail`, `writes`); `describe_model` gives each
+view's `params_schema`; `get_object` names the views of that object; `run_view(model, view, pk?,
+params, dry_run)` runs any of them. Views the agent uses often can also be published as their own
+tool with `mcp_tool=` (typed arguments, listed in `tools/list` only for users who may run them).
+REST clients get the same from `/schema/` (`views`, with `url` and `methods`) and object
+details (`views: {name: url}`). `AdminMcpSite.is_view_exposed(model_admin, spec)` filters views
+site-wide.
+
+## Nested admins (django-subadmin)
+
+Admins nested with [django-subadmin](https://github.com/inueni/django-subadmin) work in the REST
+API and in MCP with no configuration. The address follows the admin URL:
+
+| | items of sale 7 of client 1 |
+|---|---|
+| HTML admin | `/admin/store/client/1/sales/7/salesitem/` |
+| REST | `/api/v1/store/client/1/sales/7/salesitem/` (+ `schema/`, `actions/<name>/`, `views/<name>/`, `<pk>/`, `<pk>/delete-preview/`, `<pk>/views/<name>/`) |
+| MCP | `model="store.client/sales/salesitem"`, `parents=[1, 7]` |
+
+Lists are scoped to the parent, the parent FK is set on create (and is not accepted in payloads),
+and every ancestor must be viewable by the user (and by the token's scopes). The registry /
+`list_models` list nested admins with `nested_under`; object details and `/schema/` /
+`describe_model` link to `children`. `api_enabled = False` / `mcp_enabled = False` on a
+`SubAdmin` hides it and everything nested under it. Other nesting libraries can plug in with a
+`NestedAdapter` (`admin_api.nested`).
 
 ## Development
 
 ```bash
 uv sync
 uv run pytest                    # everything; -m "not conformance" skips the live-server/subprocess tests
-scripts/matrix.sh                # Django 4.2 / 5.2 / 6.1 x mcp 2.3.0 / latest
+uvx nox                          # lint + matrix: Django 4.2 / 5.2 / 6.1 x mcp 2.3.0 / latest (+ django-subadmin on 5.2 / 6.1)
+uvx nox -l                       # list sessions; run one with -s "tests(django=6.1, mcp=latest)"
 ```

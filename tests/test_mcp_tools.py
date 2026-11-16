@@ -59,9 +59,19 @@ def test_tools_catalogue(mcp):
         "update_object",
         "delete_object",
         "run_action",
+        "run_view",
+        "client_statement",  # @admin_api.view(mcp_tool=...)
+        "post_sale",
     ]
     ro = AdminMcpSite(api_site, read_only=True)
-    assert [t.name for t in ro.get_tools()] == ["list_models", "describe_model", "list_objects", "get_object"]
+    assert [t.name for t in ro.get_tools()] == [
+        "list_models",
+        "describe_model",
+        "list_objects",
+        "get_object",
+        "run_view",
+        "client_statement",  # post_sale writes: hidden
+    ]
 
 
 def test_list_models(call, data):

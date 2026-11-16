@@ -48,7 +48,14 @@ def obj(properties: dict, required=(), *, additional=False, description=None) ->
 
 MODEL_ARG = {
     "type": "string",
-    "description": "Model as 'app_label.model_name', exactly as returned by list_models (e.g. 'store.sales').",
+    "description": "Model exactly as returned by list_models: 'app_label.model_name' (e.g. 'store.sales'), "
+    "or a nested path 'app_label.parent/child' for models listed with nested_under (e.g. 'store.client/sales').",
+}
+PARENTS_ARG = {
+    "type": "array",
+    "items": {"type": ["integer", "string"]},
+    "description": "Nested models only: the pk of each parent object, outermost first, one per 'nested_under' "
+    "entry (e.g. model 'store.client/sales/salesitem' with parents [client_pk, sales_pk]).",
 }
 PK_ARG = {"type": ["integer", "string"], "description": "Primary key of the object."}
 DATA_ARG = {

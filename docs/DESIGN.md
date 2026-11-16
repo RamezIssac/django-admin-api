@@ -179,6 +179,9 @@ All URLs are under `<mount>/v1/`. The version comes from `AdminApiSite.version`.
 | DELETE | `/<app>/<model>/<pk>/` | delete | `has_delete_permission(obj)` |
 | GET | `/<app>/<model>/<pk>/delete-preview/` | cascade preview | `has_delete_permission(obj)` |
 | POST | `/<app>/<model>/actions/<name>/` | run an action | action's `allowed_permissions` |
+| any | `/<app>/<model>/<pk>/<child>/[<pk>/<child>/…]` + any tail above | nested admins (§15) | same, plus view on every ancestor |
+| GET/POST | `/<app>/<model>/views/<name>/` | custom view (§16) | the view's `permissions` |
+| GET/POST | `/<app>/<model>/<pk>/views/<name>/` | custom view on one object (§16) | the view's `permissions`, with `obj` |
 | — | `/reports/<slug>/` | **reserved** (slick_reporting, later) | — |
 | — | `/mcp/` (outside `/v1/`) | **reserved** (MCP, later) | — |
 
@@ -511,7 +514,7 @@ ignore them, so the API used to answer 200 for changes it did not make.
 
 | Item | Reservation |
 |---|---|
-| Custom admin views (`view_view`, `get_by_slug`) | `@admin_api.view` decorator name reserved |
+| Custom admin views (`view_view`, `get_by_slug`) | **built**: `@admin_api.view` (§16) |
 | slick_reporting reports | `/api/v1/reports/<slug>/` path reserved |
 | MCP server | **built** (§14) |
 | JSON Schema | **built**: `/schema/` → `input_schema` (§14.4) |
@@ -563,12 +566,19 @@ Phase 2 (MCP), one commit each:
     (so receivers can check `is_dry_run`); ra_erp MCP smoke test. django-erp-framework PR #55
     (`feature/admin-api`, with the two phase-1 commits rebased onto `develop`).
 
+Phase 3:
+
+17. Nested admins: generic layer (`admin_api.nested`) + django-subadmin adapter
+    (`admin_api.contrib.subadmin`), REST routes, MCP `parents` (§15).
+18. Custom views: `@admin_api.view`, REST `views/<name>/` routes, `run_view` + promoted MCP
+    tools (§16).
+
 ### Next
 
 - slick_reporting reports at `/api/v1/reports/<slug>/` + a `run_report` tool.
 - OAuth 2.1 for remote MCP connectors.
 - File uploads (multipart) on writes; generic inlines on writes; `list_editable` bulk edit.
-- Final PyPI distribution name (`django-admin-api` is taken).
+- PyPI distribution name: settled on `django-admin-api2` (`django-admin-api` was taken; the import package stays `admin_api`).
 
 ---
 
@@ -624,7 +634,7 @@ hint when it is missing. (The planned system check W002 was dropped: the URLconf
 loudly.)
 
 ```python
-# pip install "django-admin-api[mcp]"      (mcp>=2.3,<3)
+# pip install "django-admin-api2[mcp]"     (mcp>=2.3,<3)
 from admin_api.mcp import AdminMcpSite
 
 mcp_site = AdminMcpSite(api_site)            # read_only=False, server_name=…, instructions=…
@@ -643,6 +653,8 @@ urlpatterns += [path("mcp/", mcp_site.urls)]
 | `update_object` | `model`, `pk`, `data`, `dry_run` | `services.update(partial=True)` |
 | `delete_object` | `model`, `pk`, `confirm` | preview unless `confirm` |
 | `run_action` | `model`, `action`, `pks[]` or `all` + `filters{}` | `services.run_action` (no dry run) |
+| `run_view` | `model`, `view`, `pk?`, `params{}`, `dry_run` | `services.run_view` (§16) |
+| *view tools* | `pk?`, the view's params, `dry_run?` | views with `mcp_tool=` (§16) |
 
 - `model` is `"app_label.model_name"`. `ordering` takes column names (`"-date"`), translated to
   the admin's `o=` indexes; `filters` are the admin's own changelist parameters, as listed by
@@ -697,4 +709,165 @@ message capture. The SDK diverts stray stdout to stderr while serving.
 the test client, gatekeeping, ASGI), `test_mcp_stdio.py` (official client in-process, CLI),
 `test_mcp_conformance.py` (official client vs. live HTTP server and a real `mcp_serve`
 subprocess, in both the 2025-11-25 handshake era and the 2026-07-28 stateless era).
-`scripts/matrix.sh`: Django 4.2 / 5.2 / 6.1 × `mcp` 2.3.0 / latest `<3`.
+`noxfile.py` (`uvx nox`): Django 4.2 / 5.2 / 6.1 × `mcp` 2.3.0 / latest `<3`, each Django on
+the lowest Python it supports within our range (3.10 / 3.12 / 3.13), plus a `lint` session.
+
+---
+
+## 15. Nested admins (milestone 17, as built)
+
+Goal: admins nested with django-subadmin (`SubAdmin` hung off a registered `RootSubAdmin`, any
+depth) work in REST and MCP. All the work is in admin_api; django-subadmin is not modified and
+not a dependency.
+
+### 15.1 Addressing
+
+One path drives every surface. The REST path minus the pks is the MCP `model`; the pks in order
+are `parents`. Each child segment is the child's `model_name` (as subadmin's own URLs).
+
+| | items of sale 7 of client 1 |
+|---|---|
+| HTML | `/admin/store/client/1/sales/7/salesitem/` |
+| REST | `/api/v1/store/client/1/sales/7/salesitem/` (+ `schema/`, `actions/<name>/`, `<pk>/`, `<pk>/delete-preview/`) |
+| MCP | `model="store.client/sales/salesitem"`, `parents=[1, 7]` |
+
+`admin_api.nested.ModelPath` (`parse`, `label`, `child`, `url`, `url_template`). A nested
+admin also registered top level (e.g. `Sales`) is listed twice: different admins, different
+paths.
+
+### 15.2 Layers
+
+- **Core (`admin_api.nested`, generic).** `NestedAdapter` protocol: `get_children(admin)`,
+  `is_child(admin)`, `segment(child)`, `init_args(child)`, `prepare_request(admin, request,
+  parents)`. `AdminApiSite.nested_adapters` (default `[SubAdminAdapter]`).
+  `AdminApiSite.get_api_children(admin) → {segment: api_admin}` (exposed only),
+  `get_admin_chain(path) → [root, …, target]` or `None`, `prepare_nested_request(…)`.
+- **API twins of nested admins.** `get_api_admin(child)` builds `(ApiAdminMixin, ChildCls)
+  (*adapter.init_args(child))`, i.e. `(parent_model, api_parent)` for subadmin, cached per
+  child instance. Children are always taken from the **API** parent's `subadmin_instances`, so
+  the whole chain is API-aware (ancestor `get_object` goes through api twins and scoped
+  `has_*_permission`).
+- **subadmin adapter (`admin_api.contrib.subadmin`, duck-typed).** Children =
+  `subadmin_instances`; `prepare_request` sets `request.subadmin =
+  admin.get_subadmin_helper(request, parents)` (loads each ancestor via its admin's
+  `get_object`, requires `has_view_or_change_permission(obj)` on each, checks the chain).
+  `Http404` → `not_found`, `PermissionDenied` → `permission_denied`. With the helper set,
+  subadmin itself filters the queryset, excludes the parent FK and sets it on save.
+- **Services.** `get_model_admin(…, segments=, parents=)` resolves the chain, checks the parent
+  count (`400 bad_parents`), prepares the request, then the usual view check + scope; it sets
+  `request.admin_api_target` (`Target(api_site, path, parents, chain)`). Everything after that
+  (changelist, schema, detail, writes, actions, delete) is unchanged.
+- **REST.** One catch-all route after the flat ones, `<app>/<model>/<path:nested>/`, parsed by
+  `views.nested.parse_nested` into `(segments, parents, kind, kwargs)` and dispatched to the
+  normal view classes with `segments`/`parents`. Segments must look like a `model_name`; a pk
+  of `actions` / a tail of `delete-preview` resolve as on flat models.
+- **MCP.** Every model tool takes optional `parents`; `model` accepts a path. Hiding an admin
+  (`api_enabled` / `mcp_enabled = False`, `is_exposed`) hides its descendants.
+
+### 15.3 Discovery
+
+- Registry / `list_models`: nested entries after a viewable parent (children of a model the
+  user cannot view are not listed). REST: `path`, `nested_under` (the model of each parent pk),
+  `url: null`, `url_template` (`/api/v1/store/client/{0}/sales/`). MCP: `model` = path,
+  `nested_under`.
+- `/schema/` / `describe_model`: `children: [{model, name, name_plural}]` (REST also
+  `segment`); nested schemas carry `model.path` and `model.parents`.
+- Detail: REST `children: {"sales": "/api/v1/store/client/1/sales/"}`; MCP `get_object`
+  `children: {"sales": {"model": "store.client/sales", "parents": [1]}}`. Only children the
+  user may view (scopes included). No counts (no extra queries). Not on write responses.
+
+### 15.4 Permissions and scopes
+
+Free from the design: ancestors are checked by subadmin through the API parents'
+`has_view_or_change_permission`, which includes token scopes. A token therefore needs a view
+scope on every ancestor (`store.client:view` + `store.sales:view` for `store.client/sales`).
+
+### 15.5 Tests and versions
+
+`tests/test_subadmin.py` (REST + MCP + permissions + scopes + 2 levels) on
+`tests/subadmin_site.py`; `tests/test_nested.py` for path parsing (always runs).
+django-subadmin is a dev dependency (5.2.x for Django 5.2, 6.1.x for Django ≥ 6.1, Python ≥
+3.12); it has no Django 4.2 release, so the module skips there (`importorskip(…,
+exc_type=ImportError)`). `noxfile.py` installs the matching subadmin per Django row.
+
+HTML caveat (not an API issue): erp_framework's `EntityAdmin` and `SubAdminMixin` both set
+`change_form_template`, `change_list_template` and `get_urls`; combining them in the HTML admin
+needs care.
+
+---
+
+## 16. Custom views (milestone 18, as built)
+
+Goal: custom admin pages (views added with `get_urls()`: statements, balances, "post this
+invoice") reachable from REST and MCP, declared once on the ModelAdmin.
+
+### 16.1 Declaration
+
+`@admin_api.view(...)` on a ModelAdmin method attaches a `ViewSpec` (`admin_api.custom_views`).
+The method holds the data part of the page; the HTML view calls it and renders, the API encodes
+its return value with `encode_value` (models → `{pk, str}`, dates ISO, Decimals as strings).
+
+- `detail=True` → `method(request, obj, **params)`; `False` → `method(request, **params)`.
+- `params`: a `Form` class (bound to the query string / the JSON body translated with
+  `field_post_values`, `cleaned_data` as kwargs, schema from `form_object_schema`) or a dict of
+  JSON Schema properties + `required` (a small validator: types, `enum`, `minimum`/`maximum`,
+  array items, `default`; `format` date/date-time/time are parsed; GET strings are coerced to
+  the declared type; unknown keys are rejected). Errors: `400 invalid_params` with `fields`.
+- `permissions` (default `["view"]`): like `@admin.action(permissions=…)`. `view` →
+  `has_view_or_change_permission(request, obj)`, `add` → `has_add_permission(request)`,
+  `change`/`delete` → `has_X_permission(request, obj)`, other → `has_<perm>_permission(request)`.
+  For listing (`/schema/`, `list_models`) detail views are checked without an object.
+- `writes` (default: `permissions` asks for more than `view`; `writes=True` with the default
+  permissions means `["change"]`). Write views: POST only, `atomic()`, hidden on read-only MCP
+  sites, `dry_run` in MCP.
+- Token scopes: the built-in permissions of the view; a write view naming only custom permissions
+  also needs `change`, so a view-only token never runs a write.
+- Discovery walks the class MRO; an override without the decorator removes the view.
+- `api_enabled=False` hides a view everywhere, `mcp_enabled=False` from MCP only,
+  `AdminMcpSite.is_view_exposed(model_admin, spec)` site-wide.
+
+### 16.2 Running
+
+`custom_views.run_view(model_admin, request, name, object_id=, data=)` (also
+`services.run_view`): resolve the spec, load the object through `get_object` (so
+`get_api_queryset` and nested parents apply), check permissions and scopes, validate params,
+call the method on a copy of the request with in-memory message capture. `PermissionDenied` →
+403, `ValidationError` → `400 validation_failed`, a returned `HttpResponse` → `400
+view_not_supported` (and a write view is rolled back). Response:
+`{"view", "pk" (detail), "result", "messages"?}`.
+
+### 16.3 REST
+
+`<model>views/<name>/` and `<model><pk>/views/<name>/`, before the nested catch-all;
+`parse_nested` knows the same tails for nested admins. `/schema/` → `views: [{name, title,
+description, detail, writes, permissions, params_schema, output_schema?, mcp_tool?, methods,
+url}]` (`{pk}` in detail urls). Object detail → `views: {name: url}` for the detail views the
+user may run on that object (skipped if the model has a field named `views`).
+
+### 16.4 MCP: telling the LLM
+
+A generic tool only works if the model knows what it can call, so discovery is layered:
+
+1. **Server instructions** (sent at connect): custom views exist, where they are listed, and
+   `run_view` runs them.
+2. **`list_models`**: `views: [{name, description, detail, writes?, mcp_tool?}]` per model,
+   so the LLM sees which models have views before choosing one.
+3. **`describe_model`**: the full contract, `params_schema` per view (with `pk`: only the
+   views allowed on that object).
+4. **`get_object`**: `views: [names]` runnable on that object.
+5. **`run_view(model, parents?, view, pk?, params, dry_run)`**: one generic tool, so the tool
+   list stays the same size however many views there are. On read-only sites it stays (write
+   views are hidden and refused).
+6. **Promoted tools** (`mcp_tool="name"`): the view as its own tool, arguments flattened (`pk`
+   for detail views, the params, `dry_run` for write views; params named `pk`/`dry_run` are
+   refused at declaration). Listed per request: only for users (and token scopes) that may run
+   the view. Top-level admins only (nested views go through `run_view`). Names must be unique
+   per MCP site and not clash with the built-in tools: `ImproperlyConfigured` from
+   `get_tools()`, reported at startup by system check `admin_api.E002`.
+
+### 16.5 Tests
+
+`tests/test_custom_views.py` (declaration, REST discovery/running/params/permissions/scopes,
+nested routing, MCP discovery, `run_view`, dry run, promoted tools, permissions, clashes);
+`tests/test_subadmin.py` (views on a nested admin, REST and MCP); the conformance scenario
+calls a promoted tool and `run_view` (dry run) through the official client.
