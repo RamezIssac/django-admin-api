@@ -1,7 +1,8 @@
 """REST routing for nested admins (see :mod:`admin_api.nested`).
 
 ``/v1/<app>/<model>/<pk>/<child>/[<pk>/<child>/…]`` followed by the same tails as a top-level
-model: ``""`` (changelist), ``schema/``, ``actions/<name>/``, ``<pk>/``, ``<pk>/delete-preview/``.
+model: ``""`` (changelist), ``schema/``, ``actions/<name>/``, ``views/<name>/``, ``<pk>/``,
+``<pk>/delete-preview/``, ``<pk>/views/<name>/``.
 """
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ import re
 
 from ..errors import MethodNotAllowed, NotFound
 from .changelist import ActionView, ChangeListView, SchemaView
+from .custom import CustomViewView
 from .detail import DeletePreviewView, ObjectView
 
 ROUTES = {
@@ -18,6 +20,8 @@ ROUTES = {
     "action": (ActionView, ("POST",)),
     "object": (ObjectView, ("GET", "PATCH", "PUT", "DELETE")),
     "delete_preview": (DeletePreviewView, ("GET",)),
+    "view": (CustomViewView, ("GET", "POST")),
+    "object_view": (CustomViewView, ("GET", "POST")),
 }
 NESTED_METHODS = ("GET", "POST", "PATCH", "PUT", "DELETE")
 _SEGMENT_RE = re.compile(r"^[a-z_][a-z0-9_]*$")  # a model_name
@@ -29,7 +33,9 @@ def parse_nested(nested: str) -> tuple[list[str], list[str], str, dict]:
     segments, parents = [], []
 
     def is_tail(rest):
-        return len(rest) == 2 and (rest[0] == "actions" or rest[1] == "delete-preview")
+        if len(rest) == 3:
+            return rest[1] == "views"
+        return len(rest) == 2 and (rest[0] in ("actions", "views") or rest[1] == "delete-preview")
 
     while len(parts) >= 2 and not is_tail(parts):
         parents.append(parts[0])
@@ -43,6 +49,10 @@ def parse_nested(nested: str) -> tuple[list[str], list[str], str, dict]:
         return segments, parents, "schema", {}
     if len(parts) == 2 and parts[0] == "actions":
         return segments, parents, "action", {"action_name": parts[1]}
+    if len(parts) == 2 and parts[0] == "views":
+        return segments, parents, "view", {"view_name": parts[1]}
+    if len(parts) == 3:
+        return segments, parents, "object_view", {"object_id": parts[0], "view_name": parts[2]}
     if len(parts) == 1:
         return segments, parents, "object", {"object_id": parts[0]}
     return segments, parents, "delete_preview", {"object_id": parts[0]}

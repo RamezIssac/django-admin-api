@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 from weakref import WeakSet
 
+from django.core.exceptions import ImproperlyConfigured
+
 from ..auth import TokenAuthenticator
 from ..errors import ApiError, NotAuthenticated, PermissionDeniedError
 from .tools import ToolResult, ToolSpec
@@ -24,6 +26,7 @@ permissions; validation and business rules are the admin's own.
 columns, actions and the JSON Schema for create/update.
 3. Prefer dry_run=true on create_object/update_object before the real write.
 4. delete_object only deletes with confirm=true; without it you get a preview.
+5. Some models have custom views (reports, statements, computed pages, business operations), listed under 'views' by list_models and described (parameters) by describe_model. Run them with run_view; some are also published as their own tools.
 Errors come back with the same envelope as the REST API (error, detail, fields, \
 non_field_errors, inlines)."""
 
@@ -70,10 +73,48 @@ class AdminMcpSite:
             description = description(request)
         return str(description) if description else None
 
+    def is_view_exposed(self, model_admin, spec) -> bool:
+        """Is the custom view ``spec`` (``@admin_api.view``) of ``model_admin`` exposed through MCP?
+        Called after the view's own ``api_enabled`` / ``mcp_enabled`` and the read-only rule."""
+        return True
+
     def get_tools(self, request=None) -> list[ToolSpec]:
+        """The generic tools plus the views published with ``mcp_tool=``. With a ``request``, a
+        view tool is only listed when the user may run the view (as checked without an object)."""
         from .handlers import TOOLS
 
-        return [tool for tool in TOOLS if not (self.read_only and tool.writes)]
+        tools = [tool for tool in TOOLS if not (self.read_only and tool.writes)]
+        return tools + self.get_view_tools(request, reserved={t.name for t in tools})
+
+    def get_view_tools(self, request=None, *, reserved=()) -> list[ToolSpec]:
+        from .. import custom_views
+        from .handlers import view_tool
+
+        out, seen = [], {}
+        for model, model_admin in self.api_site.exposed_admins():
+            if not self.is_exposed(model_admin):
+                continue
+            label = f"{model._meta.app_label}.{model._meta.model_name}"
+            for spec in custom_views.declared_views(model_admin).values():
+                if not spec.mcp_tool:
+                    continue
+                if spec.mcp_tool in reserved or spec.mcp_tool in seen:
+                    other = seen.get(spec.mcp_tool, "a built-in tool")
+                    raise ImproperlyConfigured(
+                        f"MCP tool name {spec.mcp_tool!r} of view {label}:{spec.name} is already used by {other}."
+                    )
+                seen[spec.mcp_tool] = f"{label}:{spec.name}"
+                if not spec.api_enabled or not spec.mcp_enabled or (self.read_only and spec.writes):
+                    continue
+                if not self.is_view_exposed(model_admin, spec):
+                    continue
+                if request is not None and not (
+                    model_admin.has_view_or_change_permission(request)
+                    and custom_views.has_view_permission(model_admin, request, spec)
+                ):
+                    continue
+                out.append(view_tool(self, model_admin, spec))
+        return out
 
     def get_tool(self, name: str, request=None) -> ToolSpec | None:
         return next((tool for tool in self.get_tools(request) if tool.name == name), None)

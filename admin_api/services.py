@@ -272,6 +272,7 @@ def schema(api_site, model_admin, request) -> dict:
         "input_schema": input_schemas(model_admin, request),
         "actions": describe_actions(model_admin, request),
     }
+    payload["views"] = describe_views(model_admin, request)
     target = getattr(request, "admin_api_target", None)
     if target is not None and target.path.depth:
         payload["model"]["path"] = target.path.label
@@ -282,7 +283,43 @@ def schema(api_site, model_admin, request) -> dict:
     return payload
 
 
+def _changelist_url(request):
+    target = getattr(request, "admin_api_target", None)
+    if target is None:
+        return None
+    base = _api_base(target.api_site)
+    return target.path.url(base, target.parents) if base else None
+
+
+def describe_views(model_admin, request) -> list[dict]:
+    """The custom views (``@admin_api.view``) ``request.user`` may run, with their REST url
+    (``{pk}`` stands for the object of a detail view)."""
+    from .custom_views import available_views
+
+    base = _changelist_url(request)
+    out = []
+    for spec in available_views(model_admin, request):
+        entry = spec.describe()
+        entry["methods"] = list(spec.methods)
+        if base is not None:
+            entry["url"] = f"{base}{{pk}}/views/{spec.name}/" if spec.detail else f"{base}views/{spec.name}/"
+        out.append(entry)
+    return out
+
+
+def object_views(model_admin, request, obj, *, mcp=False, read_only=False) -> list:
+    """The detail views ``request.user`` may run on ``obj``."""
+    from .custom_views import available_views, has_view_permission
+
+    return [
+        spec
+        for spec in available_views(model_admin, request, mcp=mcp, read_only=read_only)
+        if spec.detail and has_view_permission(model_admin, request, spec, obj)
+    ]
+
+
 def detail(model_admin, request, object_id) -> dict:
+    from .custom_views import view_url
     from .detail import serialize_object
 
     obj = get_object(model_admin, request, object_id)
@@ -292,6 +329,10 @@ def detail(model_admin, request, object_id) -> dict:
     children = child_links(request, model_admin, payload["pk"])
     if children:
         payload["children"] = {link["segment"]: link["url"] for link in children}
+    views = object_views(model_admin, request, obj)
+    if views and "views" not in payload:  # a model field named "views" wins
+        base = _changelist_url(request)
+        payload["views"] = {spec.name: view_url(spec, base, obj.pk) for spec in views}
     return payload
 
 
@@ -351,6 +392,13 @@ def delete_preview(model_admin, request, object_id) -> dict:
         raise PermissionDeniedError()
     scopes.check(request, model_admin.opts, "delete")
     return _preview(model_admin, request, obj)
+
+
+def run_view(model_admin, request, name: str, *, object_id=None, data=None) -> dict:
+    """Run a custom view (``@admin_api.view``); see :func:`admin_api.custom_views.run_view`."""
+    from .custom_views import run_view as _run
+
+    return _run(model_admin, request, name, object_id=object_id, data=data)
 
 
 def run_action(model_admin, request, name: str, payload: dict) -> dict:

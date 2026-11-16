@@ -4,6 +4,7 @@ django-subadmin is installed (see tests/test_subadmin.py)."""
 from django.contrib import admin
 from subadmin import RootSubAdmin, SubAdmin
 
+import admin_api
 from admin_api import AdminApiSite
 from admin_api.mcp import AdminMcpSite
 
@@ -23,6 +24,15 @@ class SalesSub(SubAdmin):
     search_fields = ["slug"]
     fields = ["slug", "date", "status", "value"]
     subadmins = [SalesItemSub]
+
+    @admin_api.view(description="Totals of the client's sales.")
+    def totals(self, request):
+        qs = self.get_queryset(request)  # scoped to the parent client by subadmin
+        return {"count": qs.count(), "slugs": sorted(qs.values_list("slug", flat=True))}
+
+    @admin_api.view(detail=True)
+    def lines(self, request, obj):
+        return {"sale": obj.slug, "items": obj.items.count()}
 
 
 class ClientRoot(RootSubAdmin):
