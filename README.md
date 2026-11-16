@@ -2,6 +2,8 @@
 
 [![CI](https://github.com/RamezIssac/django-admin-api/actions/workflows/ci.yml/badge.svg)](https://github.com/RamezIssac/django-admin-api/actions/workflows/ci.yml)
 
+**[Design doc](docs/DESIGN.md)** · **[Decision index](docs/DECISIONS.md)** · [Changelog](CHANGELOG.md) · [Releasing](RELEASING.md)
+
 **MCP-ready out of the box.** Turn your existing Django `ModelAdmin`s into a REST API **and** an
 [MCP](https://modelcontextprotocol.io) server for AI agents (Claude Code, Claude Desktop, any MCP
 client) — with the admin's own permissions, validation and audit trail.
@@ -17,6 +19,17 @@ pip install "django-admin-api2[mcp]"   # + the MCP transports (the official MCP 
 > `django-admin-api` package — the two share the `admin_api` import name.
 
 A thin layer that makes Django `ModelAdmin` API-ready and MCP-ready.
+
+## Design-first, agent-built
+
+The primary artifact of this project is the design: [docs/DESIGN.md](docs/DESIGN.md) records
+the decisions (numbered, with the rejected options), and
+[docs/DECISIONS.md](docs/DECISIONS.md) indexes each one next to the tests that enforce it.
+Most of the implementation was written by AI coding agents — which is exactly why the design
+is the asset: generated code is only as good as the decisions it is steered by and reviewed
+against. The test suite is the executable form of those decisions (HTML-admin parity, query
+budgets, permission matrices, MCP conformance), and releases are where it all comes under
+control ([RELEASING.md](RELEASING.md)).
 
 The same `ModelAdmin` drives the HTML admin and the JSON API. Where the API should behave
 differently, write an `api_` twin:
