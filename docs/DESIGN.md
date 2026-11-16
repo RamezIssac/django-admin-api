@@ -578,7 +578,7 @@ Phase 3:
 - slick_reporting reports at `/api/v1/reports/<slug>/` + a `run_report` tool.
 - OAuth 2.1 for remote MCP connectors.
 - File uploads (multipart) on writes; generic inlines on writes; `list_editable` bulk edit.
-- Final PyPI distribution name (`django-admin-api` is taken).
+- PyPI distribution name: settled on `django-admin-api2` (`django-admin-api` was taken; the import package stays `admin_api`).
 
 ---
 
@@ -634,7 +634,7 @@ hint when it is missing. (The planned system check W002 was dropped: the URLconf
 loudly.)
 
 ```python
-# pip install "django-admin-api[mcp]"      (mcp>=2.3,<3)
+# pip install "django-admin-api2[mcp]"     (mcp>=2.3,<3)
 from admin_api.mcp import AdminMcpSite
 
 mcp_site = AdminMcpSite(api_site)            # read_only=False, server_name=…, instructions=…

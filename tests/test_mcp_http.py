@@ -172,4 +172,4 @@ def test_without_sdk_tool_layer_imports_and_transports_explain():
         "    print('GUARD', exc)\n"
     )
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True).stdout
-    assert 'GUARD The MCP transports need the official MCP SDK: pip install "django-admin-api[mcp]"' in out
+    assert 'GUARD The MCP transports need the official MCP SDK: pip install "django-admin-api2[mcp]"' in out

@@ -18,7 +18,7 @@ try:
     from mcp.server import Server
 except ImportError as exc:  # pragma: no cover - exercised without the extra installed
     raise ImproperlyConfigured(
-        'The MCP transports need the official MCP SDK: pip install "django-admin-api[mcp]"'
+        'The MCP transports need the official MCP SDK: pip install "django-admin-api2[mcp]"'
     ) from exc
 
 # The Django request of the current MCP message (HTTP: the view's request; stdio: one per call).
@@ -29,7 +29,7 @@ def _version() -> str:
     from importlib.metadata import PackageNotFoundError, version
 
     try:
-        return version("django-admin-api")
+        return version("django-admin-api2")
     except PackageNotFoundError:  # pragma: no cover
         return "0"
 
