@@ -17,7 +17,7 @@ except ImportError as exc:  # pragma: no cover
     from django.core.exceptions import ImproperlyConfigured
 
     raise ImproperlyConfigured(
-        'The MCP transports need the official MCP SDK: pip install "django-admin-api[mcp]"'
+        'The MCP transports need the official MCP SDK: pip install "django-admin-api2[mcp]"'
     ) from exc
 
 

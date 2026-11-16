@@ -1,20 +1,37 @@
 [project]
-# NOTE: "django-admin-api" is already taken on PyPI; final distribution name TBD.
-name = "django-admin-api"
-version = "0.0.1"
-description = "A thin layer that makes Django ModelAdmin API- and MCP-ready, driven by api_ twins."
+# Published as "django-admin-api2": "django-admin-api" is taken on PyPI by an unrelated,
+# inactive package. The import package stays `admin_api` (see the README).
+name = "django-admin-api2"
+version = "0.1.0a1"
+description = "MCP-ready Django admin: a REST API and an MCP server for AI agents from your existing ModelAdmins, driven by api_ twins."
 readme = "README.md"
 license = "MIT"
 authors = [{ name = "Ramez Ashraf" }]
+keywords = ["django", "admin", "rest", "api", "mcp", "model-context-protocol", "ai-agents"]
 requires-python = ">=3.10"
 dependencies = ["django>=4.2"]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 3 - Alpha",
     "Framework :: Django",
     "Framework :: Django :: 4.2",
     "Framework :: Django :: 5.2",
+    "Framework :: Django :: 6.1",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Software Development :: Libraries",
 ]
+
+[project.urls]
+Homepage = "https://github.com/RamezIssac/django-admin-api"
+Documentation = "https://github.com/RamezIssac/django-admin-api#readme"
+Repository = "https://github.com/RamezIssac/django-admin-api"
+Issues = "https://github.com/RamezIssac/django-admin-api/issues"
 
 [project.optional-dependencies]
 # MCP transports (Streamable HTTP view, manage.py mcp_serve). The tool layer needs nothing extra.
