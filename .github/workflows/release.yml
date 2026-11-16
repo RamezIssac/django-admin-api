@@ -1,0 +1,41 @@
+name: Release
+
+# Publish to PyPI on version tags (vX.Y.Z, incl. alphas like v0.1.0a1) via trusted
+# publishing: no API token is stored anywhere. One-time setup in RELEASING.md.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    # The full lint + Django x MCP test matrix must pass before anything is published.
+    uses: ./.github/workflows/ci.yml
+
+  check-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Tag must match the pyproject version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          if [ "$tag" != "$version" ]; then
+            echo "tag v$tag does not match pyproject version $version"
+            exit 1
+          fi
+
+  publish:
+    needs: [ci, check-tag]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write  # trusted publishing (OIDC) to PyPI
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - run: uv build
+      - uses: pypa/gh-action-pypi-publish@release/v1

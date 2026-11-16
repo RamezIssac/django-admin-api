@@ -172,7 +172,9 @@ def field_post_values(name: str, form_field, value) -> dict[str, list[str]]:
 
 def form_initial(form_class, instance, **form_kwargs) -> dict:
     """Current values as the change form would render them (python values)."""
-    form = form_class(instance=instance, **form_kwargs)
+    if issubclass(form_class, forms.BaseModelForm):
+        form_kwargs["instance"] = instance
+    form = form_class(**form_kwargs)
     return {name: form.get_initial_for_field(f, name) for name, f in form.fields.items()}
 
 
