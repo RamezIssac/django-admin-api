@@ -1,11 +1,28 @@
 from __future__ import annotations
 
+import json
+
 from . import scopes
 from .resolver import is_resolving, resolve, resolving
 
 
 def _is_api(request) -> bool:
     return bool(getattr(request, "is_api", False))
+
+
+MCP_NOTE = "Via MCP."
+
+
+def _with_mcp_note(request, message):
+    """``message`` (the change-message list or a string) as text ending in :data:`MCP_NOTE`, for MCP
+    requests. Other requests keep Django's structured message."""
+    if not getattr(request, "is_mcp", False):
+        return message
+    from django.contrib.admin.models import LogEntry
+
+    if isinstance(message, list):
+        message = LogEntry(change_message=json.dumps(message)).get_change_message()
+    return f"{message or ''} {MCP_NOTE}".strip()
 
 
 class ApiAdminMixin:
@@ -70,6 +87,13 @@ class ApiAdminMixin:
                 inlines = [scopes.scoped_inline_class(inline) for inline in inlines]
             return inlines
         return super().get_inlines(request, obj)
+
+    # --- audit trail: MCP writes say so in the LogEntry ----------------------------------------
+    def log_addition(self, request, obj, message):
+        return super().log_addition(request, obj, _with_mcp_note(request, message))
+
+    def log_change(self, request, obj, message):
+        return super().log_change(request, obj, _with_mcp_note(request, message))
 
     # --- permissions: token scopes narrow, never widen ---------------------------------------
     def has_view_permission(self, request, obj=None):

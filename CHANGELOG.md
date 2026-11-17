@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.0a2 (unreleased)
+
+- MCP `create_object` / `update_object` (and their dry runs) return the saved document's
+  `totals`, declared per admin with `api_totals`. The object is reloaded after the save, so
+  values written by signals are included (REST writes get the same reload and a `totals` entry).
+- `AdminMcpSite(require_dry_run=True)` and `mcp_require_dry_run` on an admin: a real write
+  (create, update, write views) is refused unless it carries the `confirm_token` returned by a
+  matching, valid dry run. New error codes `dry_run_required` and `invalid_confirm_token`.
+- LogEntry messages of MCP creates and updates end in `Via MCP.`.
+- `confirm_token` is a reserved view parameter name, next to `pk` and `dry_run`.
+
 ## 0.1.0a1 (unreleased)
 
 First alpha. Published as `django-admin-api2` (the `django-admin-api` name on PyPI is taken

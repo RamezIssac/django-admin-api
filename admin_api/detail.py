@@ -110,6 +110,13 @@ def serialize_inlines(model_admin, request, obj) -> dict:
     return out
 
 
+def serialize_totals(model_admin, request, obj) -> dict:
+    """The header totals named by ``api_totals`` (field names, admin methods or model attributes)."""
+    getter = getattr(model_admin, "get_api_totals", None)
+    names = getter(request, obj) if getter else getattr(model_admin, "api_totals", None)
+    return serialize_values(model_admin, obj, names, explicit=True) if names else {}
+
+
 def serialize_object(model_admin, request, obj) -> dict:
     names, explicit = detail_fields(model_admin, request, obj)
     payload = {"pk": encode_value(obj.pk), "str": str(obj)}

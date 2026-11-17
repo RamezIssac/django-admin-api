@@ -339,10 +339,24 @@ def detail(model_admin, request, object_id) -> dict:
 # --------------------------------------------------------------------------------------------
 # write
 # --------------------------------------------------------------------------------------------
-def _saved(model_admin, request, result, messages) -> dict:
-    from .detail import serialize_object
+def _reloaded(model_admin, request, obj):
+    """``obj`` as stored after the save: signals and DB expressions may have changed it behind
+    the instance's back."""
+    fresh = model_admin.get_queryset(request).filter(pk=obj.pk).first()
+    if fresh is None:  # saved, but outside the API queryset
+        obj.refresh_from_db()
+        return obj
+    return fresh
 
-    payload = serialize_object(model_admin, request, result.obj)
+
+def _saved(model_admin, request, result, messages) -> dict:
+    from .detail import serialize_object, serialize_totals
+
+    obj = _reloaded(model_admin, request, result.obj)
+    payload = serialize_object(model_admin, request, obj)
+    totals = serialize_totals(model_admin, request, obj)
+    if totals:
+        payload["totals"] = totals
     if messages:
         payload["messages"] = messages
     return payload

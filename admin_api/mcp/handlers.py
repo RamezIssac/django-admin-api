@@ -17,8 +17,10 @@ from ..changelist import PER_PAGE_PARAM, SHAPE_PARAM, describe_columns, get_colu
 from ..errors import ApiError, NotFound, PermissionDeniedError
 from ..nested import ModelPath
 from ..writes import ValidationFailed
+from . import confirm
 from .tools import (
     ANY_OBJECT,
+    CONFIRM_TOKEN_ARG,
     DATA_ARG,
     DRY_RUN_ARG,
     FILTERS_ARG,
@@ -125,7 +127,10 @@ def _ensure_writable(site):
 
 def _write_result(data: dict) -> dict:
     messages = data.pop("messages", None)
+    totals = data.pop("totals", None)
     out = {"object": data}
+    if totals:
+        out["totals"] = totals
     if messages:
         out["messages"] = messages
     return out
@@ -146,6 +151,35 @@ def _dry_run(model_admin, request, fn) -> dict:
     if out["valid"]:
         out["note"] = "Nothing was saved; the pk shown is provisional."
     return out
+
+
+def _write_scope(request, **arguments) -> dict:
+    """What a confirm token covers: the target model and parents plus the write's own arguments."""
+    target = request.admin_api_target
+    return {"model": target.path.label, "parents": target.parents, **arguments}
+
+
+def _issue_confirm_token(site, request, out: dict, operation: str, scope: dict) -> dict:
+    out["confirm_token"] = confirm.issue(site.confirm_salt, request, operation, scope)
+    out["note"] = (
+        "Nothing was saved; the pk shown is provisional. To save, repeat the call without dry_run "
+        "and pass this confirm_token."
+    )
+    return out
+
+
+def _guarded_write(site, request, model_admin, args, run, operation: str, scope: dict) -> dict:
+    """A create/update: with ``require_dry_run``, a valid dry run issues the ``confirm_token`` that
+    the real write must present."""
+    gated = site.requires_dry_run(model_admin)
+    if _arg(args, "dry_run", bool, required=False, default=False):
+        out = _dry_run(model_admin, request, run)
+        return _issue_confirm_token(site, request, out, operation, scope) if gated and out["valid"] else out
+    if gated:
+        confirm.verify(
+            site.confirm_salt, site.confirm_token_max_age, args.get("confirm_token"), request, operation, scope
+        )
+    return _write_result(run())
 
 
 def _views(site, request, model_admin) -> list:
@@ -174,7 +208,7 @@ def _describe_view(spec) -> dict:
     return out
 
 
-def execute_view(site, request, model_admin, name, *, pk=None, params=None, dry_run=False) -> dict:
+def execute_view(site, request, model_admin, name, *, pk=None, params=None, dry_run=False, confirm_token=None) -> dict:
     """Run a custom view for MCP (``run_view`` and the promoted view tools)."""
     spec = custom_views.get_view(model_admin, request, name, mcp=True, read_only=site.read_only)
     if not site.is_view_exposed(model_admin, spec):
@@ -185,7 +219,11 @@ def execute_view(site, request, model_admin, name, *, pk=None, params=None, dry_
     def run():
         return services.run_view(model_admin, request, name, object_id=pk, data=params or {})
 
+    gated = spec.writes and site.requires_dry_run(model_admin)
+    scope = _write_scope(request, view=name, pk=None if pk is None else str(pk), params=params or {})
     if not dry_run:
+        if gated:
+            confirm.verify(site.confirm_salt, site.confirm_token_max_age, confirm_token, request, "run_view", scope)
         return run()
     if not spec.writes:
         return {**run(), "dry_run": True, "note": "A read-only view; nothing to roll back."}
@@ -196,7 +234,7 @@ def execute_view(site, request, model_admin, name, *, pk=None, params=None, dry_
             transaction.set_rollback(True)
     finally:
         request.is_dry_run = False
-    return out
+    return _issue_confirm_token(site, request, out, "run_view", scope) if gated else out
 
 
 # --------------------------------------------------------------------------------------------
@@ -337,9 +375,15 @@ def create_object(site, request, args) -> dict:
     _ensure_writable(site)
     model_admin, _label = _model_admin(site, request, args)
     data = _arg(args, "data", dict)
-    if _arg(args, "dry_run", bool, required=False, default=False):
-        return _dry_run(model_admin, request, lambda: services.create(model_admin, request, data))
-    return _write_result(services.create(model_admin, request, data))
+    return _guarded_write(
+        site,
+        request,
+        model_admin,
+        args,
+        lambda: services.create(model_admin, request, data),
+        "create_object",
+        _write_scope(request, data=data),
+    )
 
 
 def update_object(site, request, args) -> dict:
@@ -347,13 +391,15 @@ def update_object(site, request, args) -> dict:
     model_admin, _label = _model_admin(site, request, args)
     pk = _arg(args, "pk", (int, str))
     data = _arg(args, "data", dict)
-
-    def run():
-        return services.update(model_admin, request, pk, data, partial=True)
-
-    if _arg(args, "dry_run", bool, required=False, default=False):
-        return _dry_run(model_admin, request, run)
-    return _write_result(run())
+    return _guarded_write(
+        site,
+        request,
+        model_admin,
+        args,
+        lambda: services.update(model_admin, request, pk, data, partial=True),
+        "update_object",
+        _write_scope(request, pk=str(pk), data=data),
+    )
 
 
 def delete_object(site, request, args) -> dict:
@@ -393,6 +439,7 @@ def run_view(site, request, args) -> dict:
         pk=_arg(args, "pk", (int, str), required=False),
         params=_arg(args, "params", dict, required=False, default={}),
         dry_run=_arg(args, "dry_run", bool, required=False, default=False),
+        confirm_token=args.get("confirm_token"),
     )
 
 
@@ -461,9 +508,17 @@ TOOLS = [
         title="Create an object",
         description="Create an object through the admin's own form and save pipeline (same validation and "
         "business rules as the admin). 'data' must match describe_model's input_schema.create. "
-        "Use dry_run=true first to check it.",
+        "Use dry_run=true first to check it. The result carries the document's computed 'totals' when the "
+        "admin declares them.",
         input_schema=obj(
-            {"model": MODEL_ARG, "parents": PARENTS_ARG, "data": DATA_ARG, "dry_run": DRY_RUN_ARG}, ["model", "data"]
+            {
+                "model": MODEL_ARG,
+                "parents": PARENTS_ARG,
+                "data": DATA_ARG,
+                "dry_run": DRY_RUN_ARG,
+                "confirm_token": CONFIRM_TOKEN_ARG,
+            },
+            ["model", "data"],
         ),
         output_schema=ANY_OBJECT,
         handler=create_object,
@@ -475,9 +530,17 @@ TOOLS = [
         title="Update an object",
         description="Change some fields of an object (fields not given are kept). Inline rows: a row with "
         "'pk' updates that row, '_delete': true deletes it, a row without 'pk' is added. 'data' must match "
-        "describe_model's input_schema.update. Use dry_run=true first to check it.",
+        "describe_model's input_schema.update. Use dry_run=true first to check it. The result carries the "
+        "document's computed 'totals' when the admin declares them.",
         input_schema=obj(
-            {"model": MODEL_ARG, "parents": PARENTS_ARG, "pk": PK_ARG, "data": DATA_ARG, "dry_run": DRY_RUN_ARG},
+            {
+                "model": MODEL_ARG,
+                "parents": PARENTS_ARG,
+                "pk": PK_ARG,
+                "data": DATA_ARG,
+                "dry_run": DRY_RUN_ARG,
+                "confirm_token": CONFIRM_TOKEN_ARG,
+            },
             ["model", "pk", "data"],
         ),
         output_schema=ANY_OBJECT,
@@ -543,6 +606,7 @@ TOOLS = [
                     **DRY_RUN_ARG,
                     "description": "For views with writes=true: run the view, then roll everything back.",
                 },
+                "confirm_token": CONFIRM_TOKEN_ARG,
             },
             ["model", "view"],
         ),
@@ -568,6 +632,7 @@ def view_tool(site, model_admin, spec) -> ToolSpec:
     properties.update(params["properties"])
     if spec.writes:
         properties["dry_run"] = DRY_RUN_ARG
+        properties["confirm_token"] = CONFIRM_TOKEN_ARG
     description = spec.description or spec.title
     description += f" (Custom view {spec.name!r} of {label}; same as run_view.)"
 
@@ -584,6 +649,7 @@ def view_tool(site, model_admin, spec) -> ToolSpec:
             pk=args.get("pk") if spec.detail else None,
             params=params,
             dry_run=bool(args.get("dry_run")) if spec.writes else False,
+            confirm_token=args.get("confirm_token"),
         )
 
     annotations = {"readOnlyHint": False, "destructiveHint": True, "openWorldHint": False} if spec.writes else READ

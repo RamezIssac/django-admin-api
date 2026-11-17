@@ -141,6 +141,18 @@ On the admin: `mcp_description = "…"` (context for the LLM), `mcp_enabled = Fa
 MCP only). In hooks: `request.is_mcp`, and `request.is_dry_run` to skip side effects such as
 e-mails during a dry run (or use `transaction.on_commit`, which a dry run discards).
 
+### Safer writes
+
+- **Totals.** `api_totals = ["value", "quantity"]` on the admin (field names, admin methods or
+  model attributes) adds a `totals` entry to the result of `create_object`, `update_object` and
+  their dry runs. The saved document is read back first, so values written by signals are included.
+- **Require a dry run.** `AdminMcpSite(api_site, require_dry_run=True)` makes `create_object`,
+  `update_object` and write views refuse a real write unless it passes the `confirm_token` that a
+  valid dry run of the same arguments returned (same user, model, pk and data, valid 15 minutes).
+  An admin overrides the site with `mcp_require_dry_run = True | False`. `delete_object` keeps its
+  `confirm`; `run_action` has no dry run and is not gated.
+- **Audit.** The LogEntry of an MCP create or update reads, for example, `Changed Status. Via MCP.`
+
 ## Custom views (custom admin pages)
 
 A custom admin page (a statement, a stock balance, "post this invoice") is usually a view added
