@@ -420,7 +420,7 @@ def test_promoted_tool(mcp, call, data):
     assert err and out["fields"] == {"nope": ["Unknown parameter."]}
 
     post = mcp.get_tool("post_sale")
-    assert set(post.input_schema["properties"]) == {"pk", "note", "dry_run"} and post.writes
+    assert set(post.input_schema["properties"]) == {"pk", "note", "dry_run", "confirm_token"} and post.writes
     sale = data["sales"][0]
     out, err = call("post_sale", {"pk": sale.pk, "dry_run": True})
     assert not err and out["dry_run"] is True

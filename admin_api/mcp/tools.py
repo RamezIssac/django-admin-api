@@ -68,6 +68,11 @@ DRY_RUN_ARG = {
     "description": "Validate and run the full save pipeline, then roll everything back. "
     "Use it to check a write before doing it.",
 }
+CONFIRM_TOKEN_ARG = {
+    "type": "string",
+    "description": "Only when the server requires a dry run first: the confirm_token returned by a valid "
+    "dry_run of this exact write (same model, pk and data).",
+}
 FILTERS_ARG = {
     "type": "object",
     "additionalProperties": {"type": ["string", "integer", "number", "boolean", "array"]},

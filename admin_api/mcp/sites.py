@@ -24,7 +24,9 @@ permissions; validation and business rules are the admin's own.
 1. Call list_models to see what you can access.
 2. Call describe_model before filtering or writing: it lists filter parameters, sortable \
 columns, actions and the JSON Schema for create/update.
-3. Prefer dry_run=true on create_object/update_object before the real write.
+3. Prefer dry_run=true on create_object/update_object before the real write. Write results include the \
+saved document's 'totals' when the admin declares them. When the server requires a dry run, a real \
+write is refused unless you pass the confirm_token returned by a valid dry run of the same write.
 4. delete_object only deletes with confirm=true; without it you get a preview.
 5. Some models have custom views (reports, statements, computed pages, business operations), listed under 'views' by list_models and described (parameters) by describe_model. Run them with run_view; some are also published as their own tools.
 Errors come back with the same envelope as the REST API (error, detail, fields, \
@@ -42,6 +44,7 @@ class AdminMcpSite:
     """
 
     default_per_page = 25
+    confirm_token_max_age = 900  # seconds a dry run's confirm_token stays valid
     instructions = DEFAULT_INSTRUCTIONS
     # Bearer tokens only: MCP clients are not browsers, and a session cookie must not be enough.
     authenticators = [TokenAuthenticator]
@@ -54,11 +57,13 @@ class AdminMcpSite:
         read_only: bool = False,
         server_name: str | None = None,
         instructions: str | None = None,
+        require_dry_run: bool = False,
     ):
         self.api_site = api_site
         self.name = name
         self.read_only = read_only
         self.server_name = server_name or name
+        self.require_dry_run = require_dry_run
         if instructions is not None:
             self.instructions = instructions
         _all_sites.add(self)
@@ -77,6 +82,16 @@ class AdminMcpSite:
         """Is the custom view ``spec`` (``@admin_api.view``) of ``model_admin`` exposed through MCP?
         Called after the view's own ``api_enabled`` / ``mcp_enabled`` and the read-only rule."""
         return True
+
+    def requires_dry_run(self, model_admin) -> bool:
+        """Must writes to ``model_admin`` follow a valid dry run? The admin's ``mcp_require_dry_run``
+        (``True``/``False``) overrides the site's ``require_dry_run``."""
+        override = getattr(model_admin, "mcp_require_dry_run", None)
+        return self.require_dry_run if override is None else bool(override)
+
+    @property
+    def confirm_salt(self) -> str:
+        return f"admin_api.mcp.confirm.{self.name}"
 
     def get_tools(self, request=None) -> list[ToolSpec]:
         """The generic tools plus the views published with ``mcp_tool=``. With a ``request``, a

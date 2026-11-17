@@ -46,7 +46,7 @@ VIEW_ATTR = "admin_api_view"
 READ_METHODS = ("GET", "POST")
 WRITE_METHODS = ("POST",)
 # Reserved keys of a promoted MCP tool's arguments (params are flattened next to them).
-TOOL_RESERVED = frozenset({"pk", "dry_run"})
+TOOL_RESERVED = frozenset({"pk", "dry_run", "confirm_token"})
 
 
 class InvalidParams(ApiError):

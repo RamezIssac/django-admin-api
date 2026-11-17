@@ -561,7 +561,7 @@ Phase 2 (MCP), one commit each:
 12. MCP tool layer, SDK-free (§14.2–14.3).
 13. Streamable HTTP `/mcp/` on the official SDK (§14.5).
 14. stdio `manage.py mcp_serve` (§14.6).
-15. Conformance with the official client + version matrix (§14.7).
+15. Conformance with the official client + version matrix (§14.8).
 16. erp_framework: `erp_framework.api.erp_mcp_site`, `changeform_saved` now sends `request`
     (so receivers can check `is_dry_run`); ra_erp MCP smoke test. django-erp-framework PR #55
     (`feature/admin-api`, with the two phase-1 commits rebased onto `develop`).
@@ -703,9 +703,39 @@ only `AdminMcpSite` the URLconf creates). One synthetic request per message: the
 up on every call (revocation is immediate, scopes apply), `close_old_connections()`, in-memory
 message capture. The SDK diverts stray stdout to stderr while serving.
 
-### 14.7 Tests
+### 14.7 Write safety (0.1.0a2)
 
-`tests/test_mcp_tools.py` (handlers via `call_tool`), `test_mcp_http.py` (raw JSON-RPC through
+Three generic additions to the create/update/dry-run path. None is specific to one project.
+
+**Header totals.** `ApiAdminMixin` admins may declare `api_totals = ["value", "quantity"]` (or
+`get_api_totals(request, obj)`): field names, admin methods or model attributes, resolved like
+`api_detail_fields` entries. A write result carries them as `totals` next to `object` (REST:
+`totals` inside the object, like `messages`). `services._saved` reloads the object through the
+admin's queryset after the save, inside the transaction, so values written by signals or
+`QuerySet.update()` show up in `object` and `totals`, in a dry run too.
+
+**`require_dry_run`.** `AdminMcpSite(api_site, require_dry_run=True)` (default `False`); an admin
+overrides it with `mcp_require_dry_run = True | False`. The gate covers `create_object`,
+`update_object`, and `run_view` / promoted view tools of views with `writes=True`. A valid dry
+run returns `confirm_token`; the real write must pass it, or fails with 409 `dry_run_required`
+(no token) or 409 `invalid_confirm_token` (expired, forged, or for other arguments).
+
+- The token is stateless: a `TimestampSigner` signature (salt `admin_api.mcp.confirm.<site name>`)
+  over a SHA-256 of the user pk, the operation, the model path, the parents and the exact
+  `data` / `pk` / `params`. Valid for `AdminMcpSite.confirm_token_max_age` seconds (900).
+- An invalid dry run returns no token. `delete_object` (has `confirm`), `run_action` (no dry run)
+  and read tools are not gated.
+- A token is not single-use: the same arguments can be saved again until it expires.
+
+**LogEntry.** For MCP requests `ApiAdminMixin.log_addition` / `log_change` store a plain-text
+message, the rendered change message plus `Via MCP.` (`Changed Status. Via MCP.`). REST and the
+HTML admin keep Django's structured message. Deletions are not annotated: Django's
+`log_deletions` takes no message.
+
+### 14.8 Tests
+
+`tests/test_mcp_tools.py` (handlers via `call_tool`), `tests/test_mcp_write_safety.py` (totals,
+confirm token, LogEntry note), `test_mcp_http.py` (raw JSON-RPC through
 the test client, gatekeeping, ASGI), `test_mcp_stdio.py` (official client in-process, CLI),
 `test_mcp_conformance.py` (official client vs. live HTTP server and a real `mcp_serve`
 subprocess, in both the 2025-11-25 handshake era and the 2026-07-28 stateless era).
