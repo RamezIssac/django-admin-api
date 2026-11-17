@@ -131,6 +131,8 @@ claude mcp add erp -e ADMIN_API_TOKEN=aapi_… -- python manage.py mcp_serve
 claude mcp add --transport http erp https://erp.example.com/mcp/ --header "Authorization: Bearer aapi_…"
 ```
 
+Step by step, with scopes, `.mcp.json` and troubleshooting: [Connect Claude Code](docs/connect-claude-code.md).
+
 Tools: `list_models`, `describe_model` (columns, filters, actions, custom views, JSON Schema),
 `list_objects` (admin filters, search, ordering, paging), `get_object`, `create_object` /
 `update_object` (with `dry_run`: the full save pipeline, then rolled back), `delete_object`
