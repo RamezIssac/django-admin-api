@@ -139,8 +139,11 @@ Tools: `list_models`, `describe_model` (columns, filters, actions, custom views,
 (preview unless `confirm=true`), `run_action`, `run_view` (custom views), plus one tool per view
 published with `mcp_tool=`.
 
-On the admin: `mcp_description = "…"` (context for the LLM), `mcp_enabled = False` (hide from
-MCP only). In hooks: `request.is_mcp`, and `request.is_dry_run` to skip side effects such as
+On the admin: `mcp_description = "…"` (context for the LLM; a string or a callable of the request),
+`mcp_enabled = False` (hide from MCP only). To reuse another attribute, override
+`get_mcp_description(self, request)` (`ApiAdminMixin`):
+`def get_mcp_description(self, request): return self.description`. In hooks: `request.is_mcp`, and
+`request.is_dry_run` to skip side effects such as
 e-mails during a dry run (or use `transaction.on_commit`, which a dry run discards).
 
 ### Safer writes
