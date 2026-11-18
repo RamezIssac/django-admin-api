@@ -306,8 +306,8 @@ wheels = [
 ]
 
 [[package]]
-name = "django-admin-api2"
-version = "0.1.0a1"
+name = "django-admin-api-mcp"
+version = "0.1.0a2"
 source = { editable = "." }
 dependencies = [
     { name = "django", version = "5.2.18", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },

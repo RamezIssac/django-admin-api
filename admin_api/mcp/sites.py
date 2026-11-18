@@ -41,7 +41,7 @@ class AdminMcpSite:
     from MCP only with ``mcp_enabled = False``; give the LLM context with ``mcp_description``.
 
     The tool layer has no dependency on the MCP SDK; the transports (``urls`` for Streamable
-    HTTP, ``manage.py mcp_serve`` for stdio) need ``pip install "django-admin-api2[mcp]"``.
+    HTTP, ``manage.py mcp_serve`` for stdio) need ``pip install --pre "django-admin-api-mcp[mcp]"``.
     """
 
     default_per_page = 25

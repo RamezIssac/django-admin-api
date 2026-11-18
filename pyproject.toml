@@ -1,8 +1,8 @@
 [project]
-# Published as "django-admin-api2": "django-admin-api" is taken on PyPI by an unrelated,
+# Published as "django-admin-api-mcp": "django-admin-api" is taken on PyPI by an unrelated,
 # inactive package. The import package stays `admin_api` (see the README).
-name = "django-admin-api2"
-version = "0.1.0a1"
+name = "django-admin-api-mcp"
+version = "0.1.0a2"
 description = "MCP-ready Django admin: a REST API and an MCP server for AI agents from your existing ModelAdmins, driven by api_ twins."
 readme = "README.md"
 license = "MIT"

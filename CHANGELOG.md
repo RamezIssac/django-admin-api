@@ -1,7 +1,9 @@
 # Changelog
 
-## 0.1.0a2 (unreleased)
+## 0.1.0a2 (2026-11-19)
 
+- The project is renamed to `django-admin-api-mcp` on PyPI from this release. The import name
+  `admin_api` is unchanged.
 - MCP `create_object` / `update_object` (and their dry runs) return the saved document's
   `totals`, declared per admin with `api_totals`. The object is reloaded after the save, so
   values written by signals are included (REST writes get the same reload and a `totals` entry).
@@ -13,7 +15,7 @@
   (e.g. the admin's `description`) as the MCP description. `mcp_description` keeps working.
 - `confirm_token` is a reserved view parameter name, next to `pk` and `dry_run`.
 
-## 0.1.0a1 (unreleased)
+## 0.1.0a1 (published)
 
 First alpha. Published as `django-admin-api2` (the `django-admin-api` name on PyPI is taken
 by an unrelated package); the import package is `admin_api`.

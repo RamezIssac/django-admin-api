@@ -2,7 +2,7 @@
 
     claude mcp add erp -e ADMIN_API_TOKEN=aapi_... -- python manage.py mcp_serve
 
-Needs ``pip install "django-admin-api2[mcp]"``. Logs go to stderr; stdout carries the protocol.
+Needs ``pip install --pre "django-admin-api-mcp[mcp]"``. Logs go to stderr; stdout carries the protocol.
 """
 
 import os
