@@ -9,6 +9,8 @@
   (create, update, write views) is refused unless it carries the `confirm_token` returned by a
   matching, valid dry run. New error codes `dry_run_required` and `invalid_confirm_token`.
 - LogEntry messages of MCP creates and updates end in `Via MCP.`.
+- `get_mcp_description(request)` hook on `ApiAdminMixin`: override it to return another attribute
+  (e.g. the admin's `description`) as the MCP description. `mcp_description` keeps working.
 - `confirm_token` is a reserved view parameter name, next to `pk` and `dry_run`.
 
 ## 0.1.0a1 (unreleased)
