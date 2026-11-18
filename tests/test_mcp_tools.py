@@ -85,6 +85,22 @@ def test_list_models(call, data):
     assert models["testapp.client"]["description"] == "Customers. Sales point to a client."
 
 
+def test_get_mcp_description_hook(rf, superuser, monkeypatch):
+    request = rf.get("/")
+    request.user = superuser
+    admin = api_site.get_api_admin(testadmin.ClientAdmin(Client, testadmin.site))
+    monkeypatch.setattr(type(admin), "get_mcp_description", lambda self, request: "From the hook.")
+    assert AdminMcpSite(api_site).get_model_description(admin, request) == "From the hook."
+
+
+def test_mcp_description_attribute_still_works(rf, superuser):
+    request = rf.get("/")
+    mcp = AdminMcpSite(api_site)
+    plain = type("PlainAdmin", (), {"mcp_description": lambda self, request: "Callable."})()
+    assert mcp.get_model_description(plain, request) == "Callable."
+    assert mcp.get_model_description(type("NoDescription", (), {})(), request) is None
+
+
 def test_list_models_read_only_perms(call, data):
     out, _ = call("list_models", site=AdminMcpSite(api_site, read_only=True))
     perms = {m["model"]: m["perms"] for m in out["models"]}["testapp.sales"]

@@ -7,6 +7,7 @@ from django.core.exceptions import ImproperlyConfigured
 
 from ..auth import TokenAuthenticator
 from ..errors import ApiError, NotAuthenticated, PermissionDeniedError
+from ..mixins import ApiAdminMixin
 from .tools import ToolResult, ToolSpec
 
 logger = logging.getLogger("admin_api.mcp")
@@ -73,9 +74,12 @@ class AdminMcpSite:
         return self.api_site.is_exposed(model_admin) and getattr(model_admin, "mcp_enabled", True) is not False
 
     def get_model_description(self, model_admin, request) -> str | None:
-        description = getattr(model_admin, "mcp_description", None)
-        if callable(description):
-            description = description(request)
+        """Calls the admin's ``get_mcp_description(request)`` hook; admins without the mixin
+        get its default."""
+        hook = getattr(model_admin, "get_mcp_description", None)
+        if hook is None:
+            return ApiAdminMixin.get_mcp_description(model_admin, request)
+        description = hook(request)
         return str(description) if description else None
 
     def is_view_exposed(self, model_admin, spec) -> bool:

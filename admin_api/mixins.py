@@ -37,6 +37,14 @@ class ApiAdminMixin:
 
     api_enabled = True
 
+    def get_mcp_description(self, request) -> str | None:
+        """Context shown to the LLM for this admin. Override to return another attribute, such as
+        the admin's ordinary ``description``; defaults to ``mcp_description`` (str or callable)."""
+        description = getattr(self, "mcp_description", None)
+        if callable(description):
+            description = description(request)
+        return str(description) if description else None
+
     # --- changelist-level ------------------------------------------------------------------
     def get_list_display(self, request):
         if _is_api(request) and not is_resolving(request, "list_display"):

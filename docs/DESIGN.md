@@ -667,7 +667,9 @@ urlpatterns += [path("mcp/", mcp_site.urls)]
 
 - `mcp_enabled = False` hides an admin from MCP only. `AdminMcpSite.is_exposed()` for site rules.
 - `mcp_description` (str or `callable(request)`) is shown to the LLM in `list_models` and
-  `describe_model`.
+  `describe_model`. It is read through `ApiAdminMixin.get_mcp_description(request)`, which an
+  admin overrides to return another attribute, e.g.
+  `def get_mcp_description(self, request): return self.description`.
 - `request.is_mcp` (MCP requests are also `is_api`, so all `api_` twins apply).
 - `request.is_dry_run`: during a dry run the whole pipeline runs (hooks, signals, `LogEntry`,
   reversion) inside `atomic()` and is rolled back; `transaction.on_commit` callbacks are
