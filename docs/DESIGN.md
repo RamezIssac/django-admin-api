@@ -228,8 +228,8 @@ and `_to_field`. `_per_page` is capped by `AdminApiSite.max_page_size`.
 **Free-form lookups** (the ones no list filter consumes) must start at a field the API shows:
 the pk, `list_display` field columns, `list_filter` fields, `date_hierarchy` and the API detail
 fields of the add and the change form (`ApiChangeList.get_filters`, after the admin's own
-`lookup_allowed`). `api_lookup_fields` / `get_api_lookup_fields(request)` replaces that set. Django alone allows lookups on any local
-field, `?secret__startswith=a` included.
+`lookup_allowed`). `api_lookup_fields` / `get_api_lookup_fields(request)` replaces that set.
+Django alone allows lookups on any local field, `?secret__startswith=a` included.
 
 **Ordering** uses `?o=` with 0-based indexes into the API columns. Unmarked callables are
 removed *before* the `ChangeList` is built, so the indexes match `/schema/`'s `order_index`.
@@ -737,7 +737,8 @@ or the object changed).
 - Single use: the real write spends the row with one conditional `UPDATE` (`jti`, fingerprint,
   `used_at IS NULL`); a replay or a concurrent second call matches no row. A call that does not
   match leaves the token unspent. The real write reads the object's row `FOR UPDATE`, spends the
-  token and saves in one transaction: a failed write leaves the token unspent. Each row has `expires_at`; issuing a token deletes expired rows.
+  token and saves in one transaction: a failed write leaves the token unspent. Each row has
+  `expires_at`; issuing a token deletes expired rows.
 - 404 and 403 come before the 409: the handlers load the object and run the write's permission
   and scope checks (`services.check_add_permission` / `check_change_permission`,
   `custom_views.check_view_permission`) before `confirm.verify`.

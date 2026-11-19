@@ -8,9 +8,10 @@
   in the new `McpConfirmation` model (migration `admin_api.0002`) with a fingerprint of the user,
   the API token, the operation, the exact arguments and the object's stored row. The real write
   spends it in one conditional `UPDATE`, in the same transaction as the write (row read
-  `FOR UPDATE`): a failed write leaves the token unspent. A replay, another API token, other arguments or a changed
-  object get 409 `invalid_confirm_token`; a call that does not match leaves the token unspent. The
-  dry run then confirm flow and the error codes are unchanged. Run `migrate`.
+  `FOR UPDATE`): a failed write leaves the token unspent. A replay, another API token, other
+  arguments or a changed object get 409 `invalid_confirm_token`; a call that does not match leaves
+  the token unspent. The dry run then confirm flow and the error codes are unchanged. Run
+  `migrate`.
 - MCP writes check permissions and token scopes before the confirm token: a user who may not
   write gets 403 `permission_denied`, not 409 `dry_run_required` / `invalid_confirm_token`.
 - Free-form changelist lookups (REST `?field__lookup=` and MCP `filters`) must start at a field
