@@ -200,7 +200,7 @@ class AdminMcpSite:
 
 def audit(request, name: str, arguments, result: ToolResult) -> None:
     """One INFO record per tool call: who, from where, which tool and target, and the outcome.
-    Leaves out ``data``, ``params`` and ``confirm_token``, which may carry secrets."""
+    ``data``, ``params`` and ``confirm_token`` are not logged."""
     args = arguments if isinstance(arguments, dict) else {}
     token = getattr(request, "api_token", None)
     record = {

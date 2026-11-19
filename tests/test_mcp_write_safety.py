@@ -1,6 +1,7 @@
 """MCP write output (header totals), the require_dry_run confirm token and the "via MCP" LogEntry note."""
 
 import json
+from datetime import timedelta
 from decimal import Decimal
 
 import pytest
@@ -8,8 +9,10 @@ from django.contrib.admin.models import LogEntry
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.db.models.signals import post_delete, post_save
+from django.utils import timezone
 
 from admin_api.mcp import AdminMcpSite
+from admin_api.models import McpConfirmation
 from tests.testapp import totals_admin
 from tests.testapp.models import Client, Sales, SalesItem
 from tests.urls import api_site
@@ -222,6 +225,22 @@ def test_token_scope_is_checked_before_the_confirm_token(call, gated, ahmed, sup
     view_only = ApiToken.objects.create_token(superuser, "ro", scopes=["testapp.*:view"])[0]
     out, err = call(gated, "create_object", create_args(ahmed), token=view_only)
     assert err and out["status"] == 403
+
+
+def test_a_short_lived_site_does_not_expire_another_sites_tokens(call, gated, ahmed):
+    dry, _ = call(gated, "create_object", create_args(ahmed, dry_run=True))
+    McpConfirmation.objects.update(created=timezone.now() - timedelta(minutes=5))
+    short = AdminMcpSite(api_site, name="short", require_dry_run=True)
+    short.confirm_token_max_age = 60
+    call(short, "create_object", create_args(ahmed, dry_run=True))
+    out, err = call(gated, "create_object", create_args(ahmed, confirm_token=dry["confirm_token"]))
+    assert not err, out
+
+
+def test_binary_state_hashes_the_same_twice():
+    from admin_api.mcp.confirm import _encode
+
+    assert _encode(memoryview(b"\x01\xff")) == _encode(b"\x01\xff") == "01ff"
 
 
 def test_token_is_bound_to_the_user(call, gated, ahmed):

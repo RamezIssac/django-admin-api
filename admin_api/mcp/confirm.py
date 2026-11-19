@@ -3,7 +3,7 @@
 The token is a timestamp-signed random ``jti`` stored in :class:`admin_api.models.McpConfirmation`
 with a SHA-256 fingerprint of the user, the API token, the operation, its exact arguments and the
 stored state of the object it writes. The real write recomputes the fingerprint and spends the
-row in one conditional UPDATE, so a token works once, for that write, while the object is unchanged.
+row in one conditional UPDATE: a token works once, for that write, while the object is unchanged.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ import secrets
 from datetime import timedelta
 
 from django.core import signing
+from django.db import router
 from django.utils import timezone
 
 from ..errors import ApiError
@@ -33,13 +34,18 @@ def object_state(obj) -> dict | None:
     """The stored row of ``obj`` (all concrete fields, read fresh from the database), or ``None``."""
     if obj is None:
         return None
-    return type(obj)._base_manager.using(obj._state.db).filter(pk=obj.pk).values().first()
+    model = type(obj)
+    return model._base_manager.using(router.db_for_write(model)).filter(pk=obj.pk).values().first()
+
+
+def _encode(value) -> str:
+    return bytes(value).hex() if isinstance(value, (bytes, memoryview)) else str(value)
 
 
 def fingerprint(request, operation: str, scope: dict, state) -> str:
     token = getattr(request, "api_token", None)
     body = [request.user.pk, getattr(token, "pk", None), operation, scope, state]
-    return hashlib.sha256(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()
+    return hashlib.sha256(json.dumps(body, sort_keys=True, default=_encode).encode()).hexdigest()
 
 
 def _model():
@@ -49,10 +55,11 @@ def _model():
 
 
 def issue(salt: str, max_age: int, request, operation: str, scope: dict, state) -> str:
-    model = _model()
-    model.objects.filter(created__lt=timezone.now() - timedelta(seconds=max(max_age, 0))).delete()
+    model, now = _model(), timezone.now()
+    model.objects.filter(expires_at__lt=now).delete()
     jti = secrets.token_urlsafe(32)
-    model.objects.create(jti=jti, fingerprint=fingerprint(request, operation, scope, state))
+    expires_at = now + timedelta(seconds=max(max_age, 0))
+    model.objects.create(jti=jti, fingerprint=fingerprint(request, operation, scope, state), expires_at=expires_at)
     return signing.TimestampSigner(salt=salt).sign(jti)
 
 

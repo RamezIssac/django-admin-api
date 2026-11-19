@@ -14,9 +14,8 @@
   write gets 403 `permission_denied`, not 409 `dry_run_required` / `invalid_confirm_token`.
 - Free-form changelist lookups (REST `?field__lookup=` and MCP `filters`) must start at a field
   the API shows: the pk, `list_display` field columns, `list_filter` fields, `date_hierarchy` and
-  the API detail fields. Other local fields answer 400 `bad_lookup` (Django allows any local
-  field, a prefix oracle on hidden values). `api_lookup_fields` / `get_api_lookup_fields(request)`
-  sets the list explicitly.
+  the API detail fields. Other local fields answer 400 `bad_lookup`.
+  `api_lookup_fields` / `get_api_lookup_fields(request)` sets the list explicitly.
 - MCP `tools/list` no longer crashes for a non-superuser: tool permissions are checked in the
   sync thread (they query the database).
 - Every MCP tool call is logged at INFO to the `admin_api.mcp.audit` logger (tool, user pk, token

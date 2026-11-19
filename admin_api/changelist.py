@@ -118,8 +118,8 @@ def lookup_fields(model_admin, request) -> set[str]:
 
 
 class ApiChangeList(ChangeList):
-    """ChangeList that can skip fetching results (used by the schema endpoint) and refuses filter
-    lookups on fields the API does not show (a ``secret__startswith`` lookup leaks the value)."""
+    """ChangeList that can skip fetching results (used by the schema endpoint) and refuses free-form
+    filter lookups on fields the API does not show."""
 
     def __init__(self, *args, schema_only=False, **kwargs):
         self._schema_only = schema_only
@@ -128,11 +128,13 @@ class ApiChangeList(ChangeList):
 
     def get_filters(self, request):
         filters = super().get_filters(request)  # runs the admin's own lookup_allowed
-        if self._lookup_fields is None:
-            self._lookup_fields = lookup_fields(self.model_admin, request)
         for key in filters[2]:  # the lookups no list filter consumed
             field = _model_field(self.model, key.split(LOOKUP_SEP)[0])
-            if field is not None and field.name not in self._lookup_fields:
+            if field is None:
+                continue
+            if self._lookup_fields is None:
+                self._lookup_fields = lookup_fields(self.model_admin, request)
+            if field.name not in self._lookup_fields:
                 raise DisallowedModelAdminLookup(f"Filtering by {key} not allowed")
         return filters
 
