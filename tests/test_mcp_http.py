@@ -165,3 +165,12 @@ def test_endpoint_off_when_mcp_disabled(client, token):
 
 def test_endpoint_on_by_default(client, token):
     assert rpc(client, token, "tools/list", {})["result"]["tools"]
+
+
+def test_tools_list_for_a_non_superuser(client, staff_view_clients):
+    """Regression: permissions were loaded in the async handler and tools/list crashed."""
+    raw = ApiToken.objects.create_token(staff_view_clients, "mcp", kind="mcp")[1]
+    response = rpc(client, raw, "tools/list", {})
+    assert "error" not in response, response
+    names = {t["name"] for t in response["result"]["tools"]}
+    assert {"list_models", "list_objects"} <= names

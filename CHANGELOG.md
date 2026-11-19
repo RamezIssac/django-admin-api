@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.1.0a3 (unreleased)
+
+- **The MCP `confirm_token` is single-use and bound to the object's state.** It was a stateless
+  signature, valid 15 minutes for any number of writes: one dry run allowed repeated writes, from
+  any API token of the same user, after the object changed. Now the dry run stores a random `jti`
+  in the new `McpConfirmation` model (migration `admin_api.0002`) with a fingerprint of the user,
+  the API token, the operation, the exact arguments and the object's stored row. The real write
+  spends it in one conditional `UPDATE`, in the same transaction as the write (row read
+  `FOR UPDATE`): a failed write leaves the token unspent. A replay, another API token, other
+  arguments or a changed object get 409 `invalid_confirm_token`; a call that does not match leaves
+  the token unspent. The dry run then confirm flow and the error codes are unchanged. Run
+  `migrate`.
+- MCP writes check permissions and token scopes before the confirm token: a user who may not
+  write gets 403 `permission_denied`, not 409 `dry_run_required` / `invalid_confirm_token`.
+- Free-form changelist lookups (REST `?field__lookup=` and MCP `filters`) must start at a field
+  the API shows: the pk, `list_display` field columns, `list_filter` fields, `date_hierarchy` and
+  the API detail fields (add and change form). Other local fields answer 400 `bad_lookup`.
+  `api_lookup_fields` / `get_api_lookup_fields(request)` sets the list explicitly.
+- MCP `tools/list` no longer crashes for a non-superuser: tool permissions are checked in the
+  sync thread (they query the database).
+- Every MCP tool call is logged at INFO to the `admin_api.mcp.audit` logger (tool, user pk, token
+  prefix, IP, model, pk, view, action, pks, `all`, `dry_run`, `confirm`, outcome), without `data`,
+  `params` or `confirm_token`.
+- `AdminApiConfig.default_auto_field = "django.db.models.AutoField"`, matching migration 0001: a
+  project with `DEFAULT_AUTO_FIELD = BigAutoField` no longer sees a pending `admin_api` migration.
+
 ## 0.1.0a2 (2026-11-19)
 
 - The project is renamed to `django-admin-api-mcp` on PyPI from this release. The import name

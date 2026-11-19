@@ -50,8 +50,9 @@ def build_server(mcp_site, request_factory=None) -> Server:
     get_request = request_factory or current_request.get
 
     async def on_list_tools(ctx, params):
-        request = await sync_to_async(get_request, thread_sensitive=True)()
-        return types.ListToolsResult(tools=[_tool(spec) for spec in mcp_site.get_tools(request)])
+        # get_tools checks permissions, which query the database: run it in the sync thread
+        specs = await sync_to_async(lambda: mcp_site.get_tools(get_request()), thread_sensitive=True)()
+        return types.ListToolsResult(tools=[_tool(spec) for spec in specs])
 
     def _call(name, arguments):
         request = get_request()

@@ -145,8 +145,8 @@ Ask in plain words. Claude Code calls the tools and asks you before the first us
 
 Note: ask for the dry run in the prompt, or set `AdminMcpSite(api_site, require_dry_run=True)`,
 because a plain `create_object` writes at once. With `require_dry_run`, a real write is refused
-unless it carries the `confirm_token` that a dry run of the same arguments returned (same user,
-model, pk and data, valid 15 minutes). `delete_object` shows a preview until `confirm=true`.
+unless it carries the single-use `confirm_token` that a dry run of the same arguments returned
+(rules in the [README](../README.md)). `delete_object` shows a preview until `confirm=true`.
 
 Each saved change appears in the admin history as `Changed <field>. Via MCP.`
 

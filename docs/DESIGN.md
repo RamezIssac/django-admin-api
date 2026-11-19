@@ -225,6 +225,12 @@ key as a lookup. The prefix `_` alone can't be the rule: the admin owns `_facets
 and `_to_field`. `_per_page` is capped by `AdminApiSite.max_page_size`.
 `IncorrectLookupParameters`, `SuspiciousOperation` and out-of-range pages map to `400 bad_lookup`.
 
+**Free-form lookups** (the ones no list filter consumes) must start at a field the API shows:
+the pk, `list_display` field columns, `list_filter` fields, `date_hierarchy` and the API detail
+fields of the add and the change form (`ApiChangeList.get_filters`, after the admin's own
+`lookup_allowed`). `api_lookup_fields` / `get_api_lookup_fields(request)` replaces that set.
+Django alone allows lookups on any local field, `?secret__startswith=a` included.
+
 **Ordering** uses `?o=` with 0-based indexes into the API columns. Unmarked callables are
 removed *before* the `ChangeList` is built, so the indexes match `/schema/`'s `order_index`.
 
@@ -720,14 +726,29 @@ admin's queryset after the save, inside the transaction, so values written by si
 overrides it with `mcp_require_dry_run = True | False`. The gate covers `create_object`,
 `update_object`, and `run_view` / promoted view tools of views with `writes=True`. A valid dry
 run returns `confirm_token`; the real write must pass it, or fails with 409 `dry_run_required`
-(no token) or 409 `invalid_confirm_token` (expired, forged, or for other arguments).
+(no token) or 409 `invalid_confirm_token` (expired, forged, already used, for other arguments,
+or the object changed).
 
-- The token is stateless: a `TimestampSigner` signature (salt `admin_api.mcp.confirm.<site name>`)
-  over a SHA-256 of the user pk, the operation, the model path, the parents and the exact
-  `data` / `pk` / `params`. Valid for `AdminMcpSite.confirm_token_max_age` seconds (900).
+- The token is a `TimestampSigner` signature (salt `admin_api.mcp.confirm.<site name>`) over a
+  random `jti`, stored in `McpConfirmation` (0.1.0a3) with a SHA-256 fingerprint of the user pk,
+  the API token pk, the operation, the model path, the parents, the exact `data` / `pk` /
+  `params` and the object's stored row (all concrete fields, read fresh; inline rows are not
+  included). Valid for `AdminMcpSite.confirm_token_max_age` seconds (900).
+- Single use: the real write spends the row with one conditional `UPDATE` (`jti`, fingerprint,
+  `used_at IS NULL`); a replay or a concurrent second call matches no row. A call that does not
+  match leaves the token unspent. The real write reads the object's row `FOR UPDATE`, spends the
+  token and saves in one transaction: a failed write leaves the token unspent. Each row has
+  `expires_at`; issuing a token deletes expired rows.
+- 404 and 403 come before the 409: the handlers load the object and run the write's permission
+  and scope checks (`services.check_add_permission` / `check_change_permission`,
+  `custom_views.check_view_permission`) before `confirm.verify`.
 - An invalid dry run returns no token. `delete_object` (has `confirm`), `run_action` (no dry run)
   and read tools are not gated.
-- A token is not single-use: the same arguments can be saved again until it expires.
+
+**Audit log.** `AdminMcpSite.call_tool` logs one INFO record per call to `admin_api.mcp.audit`
+(`extra={"mcp_audit": {...}}`): tool, user pk, token prefix, `REMOTE_ADDR`, model, pk, view,
+action, pks, `all`, `dry_run`, `confirm`, outcome. Caller strings are logged with `repr`. `data`,
+`params` and `confirm_token` are left out. A tool that raises is logged as `server_error`.
 
 **LogEntry.** For MCP requests `ApiAdminMixin.log_addition` / `log_change` store a plain-text
 message, the rendered change message plus `Via MCP.` (`Changed Status. Via MCP.`). REST and the

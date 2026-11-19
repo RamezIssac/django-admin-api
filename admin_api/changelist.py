@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
 from typing import Any
 
+from django.contrib.admin.exceptions import DisallowedModelAdminLookup
 from django.contrib.admin.utils import label_for_field, lookup_field
 from django.contrib.admin.views.main import ChangeList
 from django.core.exceptions import FieldDoesNotExist
+from django.db.models.constants import LOOKUP_SEP
 from django.http import QueryDict
 
 from .decorators import is_api_display
@@ -96,12 +99,48 @@ def get_columns(model_admin, request) -> list[Column]:
     return columns
 
 
+def lookup_fields(model_admin, request) -> set[str]:
+    """Names of the fields a free-form filter lookup may start from: ``api_lookup_fields`` /
+    ``get_api_lookup_fields(request)``, else the fields the API shows (columns, filters, detail)."""
+    from .detail import detail_fields
+
+    model = model_admin.model
+    getter = getattr(model_admin, "get_api_lookup_fields", None)
+    explicit = getter(request) if getter else getattr(model_admin, "api_lookup_fields", None)
+    if explicit is not None:
+        names = list(explicit)
+    else:
+        names = [model._meta.pk.name, model_admin.date_hierarchy]
+        names += [c.name for c in get_columns(model_admin, request) if c.kind == "field"]
+        for item in model_admin.get_list_filter(request):
+            names.append(item[0] if isinstance(item, (list, tuple)) else item)
+        names += detail_fields(model_admin, request, None)[0]  # the add form's fields
+        with contextlib.suppress(Exception):  # the change form's fields, for a blank object
+            names += detail_fields(model_admin, request, model())[0]
+    roots = (_model_field(model, n.split(LOOKUP_SEP)[0]) for n in names if isinstance(n, str))
+    return {field.name for field in roots if field is not None}
+
+
 class ApiChangeList(ChangeList):
-    """ChangeList that can skip fetching results (used by the schema endpoint)."""
+    """ChangeList that can skip fetching results (used by the schema endpoint) and refuses free-form
+    filter lookups on fields the API does not show."""
 
     def __init__(self, *args, schema_only=False, **kwargs):
         self._schema_only = schema_only
         super().__init__(*args, **kwargs)
+
+    def get_filters(self, request):
+        filters = super().get_filters(request)  # runs the admin's own lookup_allowed
+        allowed = None
+        for key in filters[2]:  # the lookups no list filter consumed
+            field = _model_field(self.model, key.split(LOOKUP_SEP)[0])
+            if field is None:
+                continue
+            if allowed is None:
+                allowed = lookup_fields(self.model_admin, request)
+            if field.name not in allowed:
+                raise DisallowedModelAdminLookup(f"Filtering by {key} not allowed")
+        return filters
 
     def get_results(self, request):
         if self._schema_only:
