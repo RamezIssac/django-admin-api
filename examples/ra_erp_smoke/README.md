@@ -9,7 +9,7 @@ search, delete preview and confirmed delete.
 
 ```bash
 uv venv /tmp/erp-venv && source /tmp/erp-venv/bin/activate
-uv pip install -e "../../[mcp]" -e ../../../django-erp-framework -e ../../../django-slick-reporting \
+uv pip install -e "../../" -e ../../../django-erp-framework -e ../../../django-slick-reporting \
     -e ../../../django-tabular-permissions -e ../../../ra_erp django-polymorphic
 PYTHONPATH=.:../../../ra_erp DJANGO_SETTINGS_MODULE=ra_smoke_settings python -m django test ra_smoke_tests
 ```

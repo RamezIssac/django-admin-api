@@ -2,7 +2,7 @@
 
     claude mcp add erp -e ADMIN_API_TOKEN=aapi_... -- python manage.py mcp_serve
 
-Needs ``pip install "django-admin-api2[mcp]"``. Logs go to stderr; stdout carries the protocol.
+Off when ``ADMIN_API_MCP_ENABLED = False``. Logs go to stderr; stdout carries the protocol.
 """
 
 import os
@@ -33,8 +33,11 @@ class Command(BaseCommand):
 
     def handle(self, *args, token=None, user=None, site=None, **options):
         from admin_api.auth import get_token_model
+        from admin_api.mcp.sites import mcp_enabled
         from admin_api.mcp.stdio import StdioRequestFactory, serve
 
+        if not mcp_enabled():
+            raise CommandError("MCP is disabled (ADMIN_API_MCP_ENABLED = False).")
         mcp_site = self.get_site(site)
         raw = token or os.environ.get(TOKEN_ENV)
         if raw and user:

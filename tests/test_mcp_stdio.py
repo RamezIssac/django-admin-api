@@ -97,6 +97,12 @@ def test_command_errors(args, message, monkeypatch):
         call_command("mcp_serve", *args)
 
 
+@override_settings(ADMIN_API_MCP_ENABLED=False)
+def test_command_refuses_when_mcp_disabled(superuser):
+    with pytest.raises(CommandError, match="MCP is disabled"):
+        call_command("mcp_serve", *SITE, "--user", "root")
+
+
 @override_settings(DEBUG=True)
 def test_command_unknown_user(db):
     with pytest.raises(CommandError, match="No user 'nobody'."):

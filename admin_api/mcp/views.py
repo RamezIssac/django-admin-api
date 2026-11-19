@@ -19,6 +19,7 @@ from django.views.decorators.csrf import csrf_exempt
 from ..errors import ApiError, PermissionDeniedError
 from . import bridge
 from .server import build_server
+from .sites import mcp_enabled
 
 
 def _origin_allowed(request) -> bool:
@@ -43,6 +44,8 @@ def make_view(mcp_site):
     @csrf_exempt
     def mcp_view(request):
         request.is_api = True
+        if not mcp_enabled():
+            return _error(ApiError("MCP is disabled (ADMIN_API_MCP_ENABLED = False).", status=404, code="mcp_disabled"))
         if request.method != "POST":
             # Stateless server: no SSE stream to GET, no session to DELETE.
             response = _error(ApiError("Use POST.", status=405, code="method_not_allowed"))

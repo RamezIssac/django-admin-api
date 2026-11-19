@@ -1,4 +1,4 @@
-# django-admin-api2 (import name: `admin_api`)
+# django-admin-api-mcp (import name: `admin_api`)
 
 [![CI](https://github.com/RamezIssac/django-admin-api/actions/workflows/ci.yml/badge.svg)](https://github.com/RamezIssac/django-admin-api/actions/workflows/ci.yml)
 
@@ -9,12 +9,11 @@
 client) — with the admin's own permissions, validation and audit trail.
 
 ```bash
-pip install django-admin-api2          # the REST API
-pip install "django-admin-api2[mcp]"   # + the MCP transports (the official MCP SDK)
+pip install --pre django-admin-api-mcp   # the REST API and the MCP server (pulls in the official MCP SDK)
 ```
 
-> **Why "2"?** The `django-admin-api` name on PyPI is taken by an unrelated, inactive package, so
-> this project is published as **django-admin-api2**. The import package is still `admin_api`
+> **Why "-mcp"?** The `django-admin-api` name on PyPI is taken by an unrelated, inactive package, so
+> this project is published as **django-admin-api-mcp**. The import package is still `admin_api`
 > (`INSTALLED_APPS += ["admin_api"]`, `import admin_api`). Do not install it alongside the old
 > `django-admin-api` package — the two share the `admin_api` import name.
 
@@ -62,7 +61,7 @@ api_site = AdminApiSite(admin_site=admin.site)
 urlpatterns += [path("api/", api_site.urls)]  # → /api/v1/
 ```
 
-Status: **alpha** (`0.1.0a1`): REST API (milestones 1–8), MCP add-on (9–15) and custom admin
+Status: **alpha** (`0.1.0a2`): REST API (milestones 1–8), MCP add-on (9–15) and custom admin
 views (17–18). Tested on Django 4.2, 5.2 and 6.1.
 The mixin is optional: admins without it are wrapped at runtime for API requests.
 
@@ -109,10 +108,6 @@ Design: [docs/DESIGN.md](docs/DESIGN.md).
 Let an AI agent (Claude Code, Claude Desktop, any MCP client) use the admin, with the same
 permissions, validation, ERP hooks and audit trail as the HTML admin.
 
-```bash
-pip install "django-admin-api2[mcp]"    # the official MCP SDK; the REST API doesn't need it
-```
-
 ```python
 # urls.py
 from admin_api.mcp import AdminMcpSite
@@ -130,6 +125,9 @@ claude mcp add erp -e ADMIN_API_TOKEN=aapi_… -- python manage.py mcp_serve
 # remote, HTTP
 claude mcp add --transport http erp https://erp.example.com/mcp/ --header "Authorization: Bearer aapi_…"
 ```
+
+Set `ADMIN_API_MCP_ENABLED = False` in settings to turn the MCP endpoints off (the HTTP view answers
+404 `mcp_disabled`, `manage.py mcp_serve` exits with an error). It defaults to `True`.
 
 Step by step, with scopes, `.mcp.json` and troubleshooting: [Connect Claude Code](docs/connect-claude-code.md).
 

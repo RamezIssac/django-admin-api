@@ -11,7 +11,7 @@ generated code is controlled.
 3. **Tests tie the code to the decision.** Each decision row names the test module that
    enforces it. A change without its test is unfinished.
 4. **CHANGELOG entry** citing the decision ids ([CHANGELOG.md](CHANGELOG.md)).
-5. **Bump `version`** in `pyproject.toml` (PEP 440; alphas look like `0.1.0a1`).
+5. **Bump `version`** in `pyproject.toml` (PEP 440; alphas look like `0.1.0a2`).
 6. **PR merged to `main`** with CI green (lint + the Django × MCP matrix).
 7. **Tag on main:** `git tag vX.Y.Z <merge-commit> && git push origin vX.Y.Z` — the tag must
    equal the pyproject version (the workflow checks). The
@@ -22,14 +22,14 @@ generated code is controlled.
 ## One-time PyPI setup (maintainer)
 
 Publishing uses [PyPI trusted publishing](https://docs.pypi.org/trusted-publishers/) (OIDC),
-so there is no API token to leak. For a project that does not exist on PyPI yet, register a
-**pending publisher**:
+so there is no API token to leak. A pending publisher is bound to a project name, so the
+`django-admin-api-mcp` project needs its own, even though `django-admin-api2` already has one.
 
-1. On PyPI: https://pypi.org/manage/account/publishing/ → *Add a new pending publisher*:
-   - PyPI project name: `django-admin-api2`
+1. On PyPI: https://pypi.org/manage/account/publishing/ → *Add a new pending publisher* (GitHub tab):
+   - PyPI project name: `django-admin-api-mcp`
    - Owner: `RamezIssac` · Repository: `django-admin-api`
    - Workflow name: `release.yml` · Environment name: `pypi`
-2. On GitHub: Settings → Environments → create `pypi` (optionally with required reviewers,
-   so a pushed tag alone cannot publish).
-3. Push the first tag (`v0.1.0a1`). PyPI creates the project on first publish and attaches
-   the publisher to it.
+2. On GitHub: Settings → Environments -> confirm `pypi` exists (optionally with required
+   reviewers, so a pushed tag alone cannot publish).
+3. After the PR is merged to `main`, tag the merge commit: `git tag v0.1.0a2 <merge-commit> && git push origin v0.1.0a2`.
+   PyPI creates the project on first publish and attaches the publisher to it.
