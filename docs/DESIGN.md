@@ -454,7 +454,7 @@ session: an invalid, revoked or expired token is `401 invalid_token`, not a fall
 ```python
 class ApiToken(models.Model):
     user = FK(AUTH_USER_MODEL, related_name="api_tokens")
-    name = CharField(max_length=100)  # "kheir mobile app"
+    name = CharField(max_length=100)  # "mobile app"
     prefix = CharField(max_length=12, unique=True)  # shown in admin, used for lookup
     key_hash = CharField(max_length=128)  # sha256(secret); secret shown once
     created = DateTimeField(auto_now_add=True)
