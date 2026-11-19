@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
 from typing import Any
 
@@ -104,7 +105,8 @@ def lookup_fields(model_admin, request) -> set[str]:
     from .detail import detail_fields
 
     model = model_admin.model
-    explicit = resolve(model_admin, "lookup_fields", request)
+    getter = getattr(model_admin, "get_api_lookup_fields", None)
+    explicit = getter(request) if getter else getattr(model_admin, "api_lookup_fields", None)
     if explicit is not None:
         names = list(explicit)
     else:
@@ -112,7 +114,9 @@ def lookup_fields(model_admin, request) -> set[str]:
         names += [c.name for c in get_columns(model_admin, request) if c.kind == "field"]
         for item in model_admin.get_list_filter(request):
             names.append(item[0] if isinstance(item, (list, tuple)) else item)
-        names += detail_fields(model_admin, request, None)[0]
+        names += detail_fields(model_admin, request, None)[0]  # the add form's fields
+        with contextlib.suppress(Exception):  # the change form's fields, for a blank object
+            names += detail_fields(model_admin, request, model())[0]
     roots = (_model_field(model, n.split(LOOKUP_SEP)[0]) for n in names if isinstance(n, str))
     return {field.name for field in roots if field is not None}
 

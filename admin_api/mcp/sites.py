@@ -166,7 +166,11 @@ class AdminMcpSite:
     def call_tool(self, request, name: str, arguments: dict | None) -> ToolResult:
         """Run a tool for ``request.user``. Errors become ``is_error`` results with the REST envelope.
         Every call is logged to ``admin_api.mcp.audit`` (see :func:`audit`)."""
-        result = self._call_tool(request, name, arguments)
+        try:
+            result = self._call_tool(request, name, arguments)
+        except Exception:
+            audit(request, name, arguments, ToolResult({"error": "server_error"}, is_error=True))
+            raise
         audit(request, name, arguments, result)
         return result
 
@@ -200,7 +204,7 @@ class AdminMcpSite:
 
 def audit(request, name: str, arguments, result: ToolResult) -> None:
     """One INFO record per tool call: who, from where, which tool and target, and the outcome.
-    ``data``, ``params`` and ``confirm_token`` are not logged."""
+    ``data``, ``params`` and ``confirm_token`` are not logged; caller strings are logged with repr."""
     args = arguments if isinstance(arguments, dict) else {}
     token = getattr(request, "api_token", None)
     record = {
@@ -211,12 +215,16 @@ def audit(request, name: str, arguments, result: ToolResult) -> None:
         "model": args.get("model"),
         "pk": args.get("pk"),
         "view": args.get("view"),
-        "dry_run": bool(args.get("dry_run")),
+        "action": args.get("action"),
+        "pks": args.get("pks"),
+        "all": args.get("all") is True,
+        "dry_run": args.get("dry_run") is True,
+        "confirm": args.get("confirm") is True,
         "outcome": result.data.get("error", "error") if result.is_error else "ok",
     }
     audit_logger.info(
-        "MCP %(tool)s user=%(user)s token=%(token)s ip=%(ip)s model=%(model)s pk=%(pk)s view=%(view)s "
-        "dry_run=%(dry_run)s outcome=%(outcome)s",
+        "MCP %(tool)r user=%(user)s token=%(token)r ip=%(ip)r model=%(model)r pk=%(pk)r view=%(view)r "
+        "action=%(action)r pks=%(pks)r all=%(all)s dry_run=%(dry_run)s confirm=%(confirm)s outcome=%(outcome)r",
         record,
         extra={"mcp_audit": record},
     )

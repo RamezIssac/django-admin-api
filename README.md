@@ -158,7 +158,8 @@ e-mails during a dry run (or use `transaction.on_commit`, which a dry run discar
   `confirm`; `run_action` has no dry run and is not gated.
 - **Audit.** The LogEntry of an MCP create or update reads, for example, `Changed Status. Via MCP.`
   Every tool call is logged at INFO to the `admin_api.mcp.audit` logger: tool, user pk, token
-  prefix, IP, model, pk, view, `dry_run` and the outcome (`ok` or the error code), without `data`.
+  prefix, IP, model, pk, view, action, pks, `all`, `dry_run`, `confirm` and the outcome (`ok` or the
+  error code), without `data`.
 
 ## Custom views (custom admin pages)
 

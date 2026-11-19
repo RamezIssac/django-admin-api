@@ -30,22 +30,21 @@ class InvalidConfirmToken(ApiError):
     code = "invalid_confirm_token"
 
 
-def object_state(obj) -> dict | None:
-    """The stored row of ``obj`` (all concrete fields, read fresh from the database), or ``None``."""
+def object_state(obj, *, lock: bool = False) -> dict | None:
+    """The stored row of ``obj`` (all concrete fields, read fresh from the database), or ``None``.
+    ``lock`` selects it FOR UPDATE (inside the caller's transaction)."""
     if obj is None:
         return None
     model = type(obj)
-    return model._base_manager.using(router.db_for_write(model)).filter(pk=obj.pk).values().first()
-
-
-def _encode(value) -> str:
-    return bytes(value).hex() if isinstance(value, (bytes, memoryview)) else str(value)
+    rows = model._base_manager.using(router.db_for_write(model)).filter(pk=obj.pk)
+    return (rows.select_for_update() if lock else rows).values().first()
 
 
 def fingerprint(request, operation: str, scope: dict, state) -> str:
     token = getattr(request, "api_token", None)
     body = [request.user.pk, getattr(token, "pk", None), operation, scope, state]
-    return hashlib.sha256(json.dumps(body, sort_keys=True, default=_encode).encode()).hexdigest()
+    encode = lambda v: bytes(v).hex() if isinstance(v, (bytes, memoryview)) else str(v)
+    return hashlib.sha256(json.dumps(body, sort_keys=True, default=encode).encode()).hexdigest()
 
 
 def _model():

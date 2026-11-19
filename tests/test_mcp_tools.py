@@ -176,6 +176,18 @@ def test_lookups_follow_api_lookup_fields(call, data, monkeypatch):
     assert err and out["error"] == "bad_lookup"
 
 
+def test_lookups_on_change_form_fields_are_allowed(call, data, monkeypatch):
+    """Fields shown only on the change form (UserAdmin's add_fieldsets pattern) stay filterable."""
+    monkeypatch.setattr(testadmin.ClientAdmin, "api_fields", ["name"], raising=False)
+    monkeypatch.setattr(
+        testadmin.ClientAdmin,
+        "get_fieldsets",
+        lambda self, request, obj=None: [(None, {"fields": ["name"] if obj is None else ["name", "notes"]})],
+    )
+    out, err = call("list_objects", {"model": "testapp.client", "filters": {"notes__startswith": "x"}})
+    assert not err and out["count"] == 0
+
+
 def test_lookups_on_shown_fields_are_allowed(call, data):
     out, err = call("list_objects", {"model": "testapp.sales", "filters": {"value__gte": 300, "slug__startswith": "S"}})
     assert not err and out["count"] == 3
@@ -336,3 +348,12 @@ def test_every_call_is_audited_without_payloads(call, data, caplog, superuser):
     assert not err and first["outcome"] == "ok", out
     assert second["outcome"] == "not_found" and second["pk"] == 404
     assert "s3cret" not in caplog.text
+
+
+def test_audit_lines_cannot_be_forged_and_name_deletes(call, data, caplog):
+    caplog.set_level("INFO", logger="admin_api.mcp.audit")
+    call("get_object", {"model": "x\nMCP 'delete_object' user=1", "pk": 1})
+    call("delete_object", {"model": "testapp.sales", "pk": data["sales"][0].pk, "confirm": True})
+    lines = [r.getMessage() for r in caplog.records if r.name == "admin_api.mcp.audit"]
+    assert len(lines) == 2 and "\n" not in lines[0]
+    assert caplog.records[-1].mcp_audit["confirm"] is True and "confirm=True" in lines[1]

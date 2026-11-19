@@ -168,16 +168,25 @@ def _issue_confirm_token(site, request, out: dict, operation: str, scope: dict, 
     return out
 
 
+def _confirmed_write(site, request, model_admin, token, operation: str, scope: dict, obj, run):
+    """A gated real write: lock the object's row, spend ``token`` and write in one transaction. A
+    failed write rolls the token back to unspent."""
+    with transaction.atomic(using=router.db_for_write(model_admin.model)):
+        confirm.verify(site, token, request, operation, scope, confirm.object_state(obj, lock=True))
+        return run()
+
+
 def _guarded_write(site, request, model_admin, args, run, operation: str, scope: dict, obj=None) -> dict:
     """A create/update of ``obj`` (``None`` for a create), its permissions already checked: with
     ``require_dry_run``, a valid dry run issues the ``confirm_token`` that the real write must present."""
     gated = site.requires_dry_run(model_admin)
-    state = confirm.object_state(obj) if gated else None
     if _arg(args, "dry_run", bool, required=False, default=False):
+        state = confirm.object_state(obj) if gated else None
         out = _dry_run(model_admin, request, run)
         return _issue_confirm_token(site, request, out, operation, scope, state) if gated and out["valid"] else out
     if gated:
-        confirm.verify(site, args.get("confirm_token"), request, operation, scope, state)
+        token = args.get("confirm_token")
+        return _write_result(_confirmed_write(site, request, model_admin, token, operation, scope, obj, run))
     return _write_result(run())
 
 
@@ -223,14 +232,14 @@ def execute_view(site, request, model_admin, name, *, pk=None, params=None, dry_
         return services.run_view(model_admin, request, name, object_id=pk, data=params or {}, obj=obj)
 
     gated = spec.writes and site.requires_dry_run(model_admin)
-    state = confirm.object_state(obj) if gated else None
     scope = _write_scope(request, view=name, pk=None if pk is None else str(pk), params=params or {})
     if not dry_run:
         if gated:
-            confirm.verify(site, confirm_token, request, "run_view", scope, state)
+            return _confirmed_write(site, request, model_admin, confirm_token, "run_view", scope, obj, run)
         return run()
     if not spec.writes:
         return {**run(), "dry_run": True, "note": "A read-only view; nothing to roll back."}
+    state = confirm.object_state(obj) if gated else None
     request.is_dry_run = True
     try:
         with transaction.atomic(using=router.db_for_write(model_admin.model)):

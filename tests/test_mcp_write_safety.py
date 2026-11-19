@@ -230,10 +230,26 @@ def test_a_short_lived_site_does_not_expire_another_sites_tokens(call, gated, ah
     assert not err, out
 
 
-def test_binary_state_hashes_the_same_twice():
-    from admin_api.mcp.confirm import _encode
+def test_binary_state_hashes_the_same_twice(rf, superuser):
+    from admin_api.mcp.confirm import fingerprint
 
-    assert _encode(memoryview(b"\x01\xff")) == _encode(b"\x01\xff") == "01ff"
+    request = rf.post("/mcp/")
+    request.user = superuser
+    as_bytes = fingerprint(request, "op", {}, {"blob": b"\x01\xff"})
+    assert fingerprint(request, "op", {}, {"blob": memoryview(b"\x01\xff")}) == as_bytes
+
+
+def test_a_failed_write_leaves_the_token_unspent(call, gated, ahmed):
+    from admin_api.models import McpConfirmation
+
+    other = Client.objects.create(name="Basma")
+    sale = Sales.objects.create(slug="S-1", client=ahmed)
+    args = {"model": "testapp.sales", "pk": sale.pk, "data": {"client": other.pk}}
+    dry, _ = call(gated, "update_object", {**args, "dry_run": True})
+    other.delete()  # the real write now fails validation; the sale's row is unchanged
+    out, err = call(gated, "update_object", {**args, "confirm_token": dry["confirm_token"]})
+    assert err and out["error"] == "validation_failed", out
+    assert McpConfirmation.objects.get().used_at is None
 
 
 def test_token_is_bound_to_the_user(call, gated, ahmed):
