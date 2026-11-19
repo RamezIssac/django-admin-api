@@ -123,18 +123,18 @@ class ApiChangeList(ChangeList):
 
     def __init__(self, *args, schema_only=False, **kwargs):
         self._schema_only = schema_only
-        self._lookup_fields = None
         super().__init__(*args, **kwargs)
 
     def get_filters(self, request):
         filters = super().get_filters(request)  # runs the admin's own lookup_allowed
+        allowed = None
         for key in filters[2]:  # the lookups no list filter consumed
             field = _model_field(self.model, key.split(LOOKUP_SEP)[0])
             if field is None:
                 continue
-            if self._lookup_fields is None:
-                self._lookup_fields = lookup_fields(self.model_admin, request)
-            if field.name not in self._lookup_fields:
+            if allowed is None:
+                allowed = lookup_fields(self.model_admin, request)
+            if field.name not in allowed:
                 raise DisallowedModelAdminLookup(f"Filtering by {key} not allowed")
         return filters
 

@@ -118,7 +118,6 @@ class McpConfirmation(models.Model):
 
     jti = models.CharField(max_length=64, unique=True)
     fingerprint = models.CharField(max_length=64)
-    created = models.DateTimeField(auto_now_add=True)
     expires_at = models.DateTimeField(db_index=True)
     used_at = models.DateTimeField(null=True, blank=True)
 

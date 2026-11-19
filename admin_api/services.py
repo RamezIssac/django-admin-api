@@ -387,10 +387,12 @@ def create(model_admin, request, payload) -> dict:
     return _saved(model_admin, request, result, messages)
 
 
-def update(model_admin, request, object_id, payload, *, partial: bool) -> dict:
+def update(model_admin, request, object_id, payload, *, partial: bool, obj=None) -> dict:
+    """``obj``: the object of ``object_id`` when the caller has already loaded it."""
     from .writes import save_from_payload
 
-    obj = get_object(model_admin, request, object_id)
+    if obj is None:
+        obj = get_object(model_admin, request, object_id)
     check_change_permission(model_admin, request, obj)
     result, messages = save_from_payload(model_admin, request, obj, _load(payload), change=True, partial=partial)
     return _saved(model_admin, request, result, messages)
@@ -416,11 +418,11 @@ def delete_preview(model_admin, request, object_id) -> dict:
     return _preview(model_admin, request, obj)
 
 
-def run_view(model_admin, request, name: str, *, object_id=None, data=None) -> dict:
+def run_view(model_admin, request, name: str, *, object_id=None, data=None, obj=None) -> dict:
     """Run a custom view (``@admin_api.view``); see :func:`admin_api.custom_views.run_view`."""
     from .custom_views import run_view as _run
 
-    return _run(model_admin, request, name, object_id=object_id, data=data)
+    return _run(model_admin, request, name, object_id=object_id, data=data, obj=obj)
 
 
 def run_action(model_admin, request, name: str, payload: dict) -> dict:

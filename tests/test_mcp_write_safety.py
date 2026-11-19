@@ -1,7 +1,6 @@
 """MCP write output (header totals), the require_dry_run confirm token and the "via MCP" LogEntry note."""
 
 import json
-from datetime import timedelta
 from decimal import Decimal
 
 import pytest
@@ -9,10 +8,9 @@ from django.contrib.admin.models import LogEntry
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.db.models.signals import post_delete, post_save
-from django.utils import timezone
 
 from admin_api.mcp import AdminMcpSite
-from admin_api.models import McpConfirmation
+from admin_api.models import ApiToken
 from tests.testapp import totals_admin
 from tests.testapp.models import Client, Sales, SalesItem
 from tests.urls import api_site
@@ -187,8 +185,6 @@ def test_view_token_is_bound_to_the_object_state(call, gated, ahmed):
 
 
 def test_token_is_bound_to_the_api_token(call, gated, ahmed, superuser):
-    from admin_api.models import ApiToken
-
     token_a = ApiToken.objects.create_token(superuser, "a", kind="mcp")[0]
     token_b = ApiToken.objects.create_token(superuser, "b", kind="mcp")[0]
     dry, _ = call(gated, "create_object", create_args(ahmed, dry_run=True), token=token_a)
@@ -220,8 +216,6 @@ def test_permission_is_checked_before_the_confirm_token(call, gated, ahmed, sale
 
 
 def test_token_scope_is_checked_before_the_confirm_token(call, gated, ahmed, superuser):
-    from admin_api.models import ApiToken
-
     view_only = ApiToken.objects.create_token(superuser, "ro", scopes=["testapp.*:view"])[0]
     out, err = call(gated, "create_object", create_args(ahmed), token=view_only)
     assert err and out["status"] == 403
@@ -229,7 +223,6 @@ def test_token_scope_is_checked_before_the_confirm_token(call, gated, ahmed, sup
 
 def test_a_short_lived_site_does_not_expire_another_sites_tokens(call, gated, ahmed):
     dry, _ = call(gated, "create_object", create_args(ahmed, dry_run=True))
-    McpConfirmation.objects.update(created=timezone.now() - timedelta(minutes=5))
     short = AdminMcpSite(api_site, name="short", require_dry_run=True)
     short.confirm_token_max_age = 60
     call(short, "create_object", create_args(ahmed, dry_run=True))
@@ -324,7 +317,6 @@ def test_admin_override_beats_the_site_setting(call, gated, ahmed, monkeypatch):
 
 
 def test_token_flow_over_stateless_http(client, superuser, ahmed, monkeypatch):
-    from admin_api.models import ApiToken
     from tests.test_mcp_http import call_tool
     from tests.urls import mcp_site
 

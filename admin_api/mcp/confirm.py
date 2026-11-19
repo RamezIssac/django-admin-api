@@ -54,16 +54,16 @@ def _model():
     return McpConfirmation
 
 
-def issue(salt: str, max_age: int, request, operation: str, scope: dict, state) -> str:
+def issue(site, request, operation: str, scope: dict, state) -> str:
     model, now = _model(), timezone.now()
     model.objects.filter(expires_at__lt=now).delete()
     jti = secrets.token_urlsafe(32)
-    expires_at = now + timedelta(seconds=max(max_age, 0))
+    expires_at = now + timedelta(seconds=max(site.confirm_token_max_age, 0))
     model.objects.create(jti=jti, fingerprint=fingerprint(request, operation, scope, state), expires_at=expires_at)
-    return signing.TimestampSigner(salt=salt).sign(jti)
+    return signing.TimestampSigner(salt=site.confirm_salt).sign(jti)
 
 
-def verify(salt: str, max_age: int, token, request, operation: str, scope: dict, state) -> None:
+def verify(site, token, request, operation: str, scope: dict, state) -> None:
     """Spend ``token`` for this write or raise. A token that does not match is left unspent."""
     if not token:
         raise DryRunRequired(
@@ -71,7 +71,7 @@ def verify(salt: str, max_age: int, token, request, operation: str, scope: dict,
             "without dry_run and pass the confirm_token the dry run returned."
         )
     try:
-        jti = signing.TimestampSigner(salt=salt).unsign(str(token), max_age=max_age)
+        jti = signing.TimestampSigner(salt=site.confirm_salt).unsign(str(token), max_age=site.confirm_token_max_age)
     except signing.SignatureExpired:
         raise InvalidConfirmToken("The confirm_token has expired. Repeat the dry run.") from None
     except signing.BadSignature:

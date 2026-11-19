@@ -398,13 +398,16 @@ def check_view_permission(model_admin, request, spec: ViewSpec, obj=None) -> Non
         scopes.check(request, model_admin.opts, op)
 
 
-def run_view(model_admin, request, name: str, *, object_id=None, data=None, mcp=False, read_only=False) -> dict:
-    """Check permissions, validate ``data`` and run the view. Returns
-    ``{"view", "result", "messages"}`` (plus ``"pk"`` for a detail view)."""
+def run_view(
+    model_admin, request, name: str, *, object_id=None, data=None, mcp=False, read_only=False, obj=None
+) -> dict:
+    """Check permissions, validate ``data`` and run the view (on ``obj`` when the caller has already
+    loaded it). Returns ``{"view", "result", "messages"}`` (plus ``"pk"`` for a detail view)."""
     from .writes import capture_messages
 
     spec = get_view(model_admin, request, name, mcp=mcp, read_only=read_only)
-    obj = view_object(model_admin, request, spec, object_id)
+    if obj is None:
+        obj = view_object(model_admin, request, spec, object_id)
     check_view_permission(model_admin, request, spec, obj)
     kwargs = clean_params(spec, request, data if data is not None else {})
 

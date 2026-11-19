@@ -160,9 +160,7 @@ def _write_scope(request, **arguments) -> dict:
 
 
 def _issue_confirm_token(site, request, out: dict, operation: str, scope: dict, state) -> dict:
-    out["confirm_token"] = confirm.issue(
-        site.confirm_salt, site.confirm_token_max_age, request, operation, scope, state
-    )
+    out["confirm_token"] = confirm.issue(site, request, operation, scope, state)
     out["note"] = (
         "Nothing was saved; the pk shown is provisional. To save, repeat the call without dry_run "
         "and pass this confirm_token."
@@ -179,9 +177,7 @@ def _guarded_write(site, request, model_admin, args, run, operation: str, scope:
         out = _dry_run(model_admin, request, run)
         return _issue_confirm_token(site, request, out, operation, scope, state) if gated and out["valid"] else out
     if gated:
-        confirm.verify(
-            site.confirm_salt, site.confirm_token_max_age, args.get("confirm_token"), request, operation, scope, state
-        )
+        confirm.verify(site, args.get("confirm_token"), request, operation, scope, state)
     return _write_result(run())
 
 
@@ -219,21 +215,19 @@ def execute_view(site, request, model_admin, name, *, pk=None, params=None, dry_
     if params is not None and not isinstance(params, dict):
         raise InvalidArguments("'params' must be an object.")
 
+    # 404 and 403 come before the confirm token's 409
+    obj = custom_views.view_object(model_admin, request, spec, pk)
+    custom_views.check_view_permission(model_admin, request, spec, obj)
+
     def run():
-        return services.run_view(model_admin, request, name, object_id=pk, data=params or {})
+        return services.run_view(model_admin, request, name, object_id=pk, data=params or {}, obj=obj)
 
     gated = spec.writes and site.requires_dry_run(model_admin)
-    state = None
-    if gated:  # 404 and 403 come before the confirm token's 409
-        obj = custom_views.view_object(model_admin, request, spec, pk)
-        custom_views.check_view_permission(model_admin, request, spec, obj)
-        state = confirm.object_state(obj)
+    state = confirm.object_state(obj) if gated else None
     scope = _write_scope(request, view=name, pk=None if pk is None else str(pk), params=params or {})
     if not dry_run:
         if gated:
-            confirm.verify(
-                site.confirm_salt, site.confirm_token_max_age, confirm_token, request, "run_view", scope, state
-            )
+            confirm.verify(site, confirm_token, request, "run_view", scope, state)
         return run()
     if not spec.writes:
         return {**run(), "dry_run": True, "note": "A read-only view; nothing to roll back."}
@@ -409,7 +403,7 @@ def update_object(site, request, args) -> dict:
         request,
         model_admin,
         args,
-        lambda: services.update(model_admin, request, pk, data, partial=True),
+        lambda: services.update(model_admin, request, pk, data, partial=True, obj=obj),
         "update_object",
         _write_scope(request, pk=str(pk), data=data),
         obj,
