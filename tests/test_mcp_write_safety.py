@@ -6,6 +6,7 @@ from decimal import Decimal
 import pytest
 from django.contrib.admin.models import LogEntry
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Permission
 from django.db.models.signals import post_delete, post_save
 
 from admin_api.mcp import AdminMcpSite
@@ -33,9 +34,11 @@ def ahmed(db):
 
 @pytest.fixture
 def call(rf, superuser):
-    def do(site, name, args=None, *, user=superuser):
+    def do(site, name, args=None, *, user=superuser, token=None):
         request = rf.post("/mcp/")
         request.user = user
+        if token is not None:
+            request.api_token = token
         result = site.call_tool(request, name, args or {})
         return result.data, result.is_error
 
@@ -121,6 +124,104 @@ def test_token_is_bound_to_the_data(call, gated, ahmed):
     out, err = call(gated, "create_object", args)
     assert err and out["error"] == "invalid_confirm_token"
     assert not Sales.objects.exists()
+
+
+def test_token_is_single_use(call, gated, ahmed):
+    dry, _ = call(gated, "create_object", create_args(ahmed, dry_run=True))
+    out, err = call(gated, "create_object", create_args(ahmed, confirm_token=dry["confirm_token"]))
+    assert not err, out
+    out, err = call(gated, "create_object", create_args(ahmed, confirm_token=dry["confirm_token"]))
+    assert err and out["error"] == "invalid_confirm_token" and "already used" in out["detail"]
+    assert Sales.objects.count() == 1
+
+
+def test_replayed_update_and_view_are_refused(call, gated, ahmed):
+    sale = Sales.objects.create(slug="S-1", client=ahmed)
+    args = {"model": "testapp.sales", "pk": sale.pk, "data": {"value": "5"}}
+    dry, _ = call(gated, "update_object", {**args, "dry_run": True})
+    assert not call(gated, "update_object", {**args, "confirm_token": dry["confirm_token"]})[1]
+    out, err = call(gated, "update_object", {**args, "confirm_token": dry["confirm_token"]})
+    assert err and out["error"] == "invalid_confirm_token"
+
+    view_args = {"pk": sale.pk, "note": "x"}
+    dry, _ = call(gated, "post_sale", {**view_args, "dry_run": True})
+    assert not call(gated, "post_sale", {**view_args, "confirm_token": dry["confirm_token"]})[1]
+    Sales.objects.filter(pk=sale.pk).update(status="draft")  # back to the dry run's state
+    run_view = {"model": "testapp.sales", "view": "post", "pk": sale.pk, "params": {"note": "x"}}
+    out, err = call(gated, "run_view", {**run_view, "confirm_token": dry["confirm_token"]})
+    assert err and out["error"] == "invalid_confirm_token"
+
+
+def test_a_mismatched_write_does_not_spend_the_token(call, gated, ahmed):
+    dry, _ = call(gated, "create_object", create_args(ahmed, dry_run=True))
+    other = create_args(ahmed, confirm_token=dry["confirm_token"])
+    other["data"]["slug"] = "S-10"
+    assert call(gated, "create_object", other)[1]
+    out, err = call(gated, "create_object", create_args(ahmed, confirm_token=dry["confirm_token"]))
+    assert not err, out
+
+
+def test_token_is_bound_to_the_object_state(call, gated, ahmed):
+    sale = Sales.objects.create(slug="S-1", client=ahmed)
+    args = {"model": "testapp.sales", "pk": sale.pk, "data": {"status": "posted"}}
+    dry, _ = call(gated, "update_object", {**args, "dry_run": True})
+    Sales.objects.filter(pk=sale.pk).update(value=Decimal(99))  # a field the write does not send
+    out, err = call(gated, "update_object", {**args, "confirm_token": dry["confirm_token"]})
+    assert err and out["error"] == "invalid_confirm_token" and "changed" in out["detail"]
+    sale.refresh_from_db()
+    assert sale.status == "draft"
+
+
+def test_view_token_is_bound_to_the_object_state(call, gated, ahmed):
+    sale = Sales.objects.create(slug="S-1", client=ahmed)
+    args = {"pk": sale.pk, "note": "x"}
+    dry, _ = call(gated, "post_sale", {**args, "dry_run": True})
+    Sales.objects.filter(pk=sale.pk).update(slug="S-1b")
+    out, err = call(gated, "post_sale", {**args, "confirm_token": dry["confirm_token"]})
+    assert err and out["error"] == "invalid_confirm_token"
+    sale.refresh_from_db()
+    assert sale.status == "draft"
+
+
+def test_token_is_bound_to_the_api_token(call, gated, ahmed, superuser):
+    from admin_api.models import ApiToken
+
+    token_a = ApiToken.objects.create_token(superuser, "a", kind="mcp")[0]
+    token_b = ApiToken.objects.create_token(superuser, "b", kind="mcp")[0]
+    dry, _ = call(gated, "create_object", create_args(ahmed, dry_run=True), token=token_a)
+    out, err = call(gated, "create_object", create_args(ahmed, confirm_token=dry["confirm_token"]), token=token_b)
+    assert err and out["error"] == "invalid_confirm_token"
+    out, err = call(gated, "create_object", create_args(ahmed, confirm_token=dry["confirm_token"]), token=token_a)
+    assert not err, out
+
+
+@pytest.fixture
+def sales_viewer(db):
+    user = get_user_model().objects.create_user("viewer", "v@x.io", "pw", is_staff=True)
+    user.user_permissions.add(*Permission.objects.filter(codename__in=["view_sales", "view_client"]))
+    return user
+
+
+def test_permission_is_checked_before_the_confirm_token(call, gated, ahmed, sales_viewer):
+    """A user who may not write gets 403, not the 409 that invites a dry run."""
+    sale = Sales.objects.create(slug="S-1", client=ahmed)
+    cases = [
+        ("create_object", create_args(ahmed)),
+        ("update_object", {"model": "testapp.sales", "pk": sale.pk, "data": {"status": "posted"}}),
+        ("run_view", {"model": "testapp.sales", "view": "post", "pk": sale.pk, "params": {"note": "x"}}),
+    ]
+    for name, args in cases:
+        for extra in ({}, {"confirm_token": "bogus"}):
+            out, err = call(gated, name, {**args, **extra}, user=sales_viewer)
+            assert err and out["status"] == 403, (name, extra, out)
+
+
+def test_token_scope_is_checked_before_the_confirm_token(call, gated, ahmed, superuser):
+    from admin_api.models import ApiToken
+
+    view_only = ApiToken.objects.create_token(superuser, "ro", scopes=["testapp.*:view"])[0]
+    out, err = call(gated, "create_object", create_args(ahmed), token=view_only)
+    assert err and out["status"] == 403
 
 
 def test_token_is_bound_to_the_user(call, gated, ahmed):

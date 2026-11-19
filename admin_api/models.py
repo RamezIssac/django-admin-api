@@ -111,3 +111,16 @@ class AbstractApiToken(models.Model):
 class ApiToken(AbstractApiToken):
     class Meta(AbstractApiToken.Meta):
         swappable = "ADMIN_API_TOKEN_MODEL"
+
+
+class McpConfirmation(models.Model):
+    """One dry run's ``confirm_token`` (see :mod:`admin_api.mcp.confirm`); ``used_at`` is set when spent."""
+
+    jti = models.CharField(max_length=64, unique=True)
+    fingerprint = models.CharField(max_length=64)
+    created = models.DateTimeField(auto_now_add=True, db_index=True)
+    used_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = _("MCP confirmation")
+        verbose_name_plural = _("MCP confirmations")

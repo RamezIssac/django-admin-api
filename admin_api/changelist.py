@@ -5,9 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from django.contrib.admin.exceptions import DisallowedModelAdminLookup
 from django.contrib.admin.utils import label_for_field, lookup_field
 from django.contrib.admin.views.main import ChangeList
 from django.core.exceptions import FieldDoesNotExist
+from django.db.models.constants import LOOKUP_SEP
 from django.http import QueryDict
 
 from .decorators import is_api_display
@@ -96,12 +98,43 @@ def get_columns(model_admin, request) -> list[Column]:
     return columns
 
 
+def lookup_fields(model_admin, request) -> set[str]:
+    """Names of the fields a free-form filter lookup may start from: ``api_lookup_fields`` /
+    ``get_api_lookup_fields(request)``, else the fields the API shows (columns, filters, detail)."""
+    from .detail import detail_fields
+
+    model = model_admin.model
+    explicit = resolve(model_admin, "lookup_fields", request)
+    if explicit is not None:
+        names = list(explicit)
+    else:
+        names = [model._meta.pk.name, model_admin.date_hierarchy]
+        names += [c.name for c in get_columns(model_admin, request) if c.kind == "field"]
+        for item in model_admin.get_list_filter(request):
+            names.append(item[0] if isinstance(item, (list, tuple)) else item)
+        names += detail_fields(model_admin, request, None)[0]
+    roots = (_model_field(model, n.split(LOOKUP_SEP)[0]) for n in names if isinstance(n, str))
+    return {field.name for field in roots if field is not None}
+
+
 class ApiChangeList(ChangeList):
-    """ChangeList that can skip fetching results (used by the schema endpoint)."""
+    """ChangeList that can skip fetching results (used by the schema endpoint) and refuses filter
+    lookups on fields the API does not show (a ``secret__startswith`` lookup leaks the value)."""
 
     def __init__(self, *args, schema_only=False, **kwargs):
         self._schema_only = schema_only
+        self._lookup_fields = None
         super().__init__(*args, **kwargs)
+
+    def get_filters(self, request):
+        filters = super().get_filters(request)  # runs the admin's own lookup_allowed
+        if self._lookup_fields is None:
+            self._lookup_fields = lookup_fields(self.model_admin, request)
+        for key in filters[2]:  # the lookups no list filter consumed
+            field = _model_field(self.model, key.split(LOOKUP_SEP)[0])
+            if field is not None and field.name not in self._lookup_fields:
+                raise DisallowedModelAdminLookup(f"Filtering by {key} not allowed")
+        return filters
 
     def get_results(self, request):
         if self._schema_only:

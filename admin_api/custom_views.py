@@ -378,24 +378,34 @@ def clean_params(spec: ViewSpec, request, data) -> dict:
 # --------------------------------------------------------------------------------------------
 # running
 # --------------------------------------------------------------------------------------------
-def run_view(model_admin, request, name: str, *, object_id=None, data=None, mcp=False, read_only=False) -> dict:
-    """Check permissions, validate ``data`` and run the view. Returns
-    ``{"view", "result", "messages"}`` (plus ``"pk"`` for a detail view)."""
+def view_object(model_admin, request, spec: ViewSpec, object_id):
+    """The object a detail view runs on (``None`` for a list view); checks the pk is given or absent."""
     from .services import get_object
-    from .writes import capture_messages
 
-    spec = get_view(model_admin, request, name, mcp=mcp, read_only=read_only)
-    obj = None
     if spec.detail:
         if object_id is None:
-            raise InvalidParams(f"View {name!r} runs on one object: give its pk.")
-        obj = get_object(model_admin, request, object_id)
-    elif object_id is not None:
-        raise InvalidParams(f"View {name!r} does not run on an object: no pk expected.")
+            raise InvalidParams(f"View {spec.name!r} runs on one object: give its pk.")
+        return get_object(model_admin, request, object_id)
+    if object_id is not None:
+        raise InvalidParams(f"View {spec.name!r} does not run on an object: no pk expected.")
+    return None
+
+
+def check_view_permission(model_admin, request, spec: ViewSpec, obj=None) -> None:
     if not has_view_permission(model_admin, request, spec, obj):
         raise PermissionDeniedError()
     for op in scope_ops(spec):  # second line of defense, like the other services
         scopes.check(request, model_admin.opts, op)
+
+
+def run_view(model_admin, request, name: str, *, object_id=None, data=None, mcp=False, read_only=False) -> dict:
+    """Check permissions, validate ``data`` and run the view. Returns
+    ``{"view", "result", "messages"}`` (plus ``"pk"`` for a detail view)."""
+    from .writes import capture_messages
+
+    spec = get_view(model_admin, request, name, mcp=mcp, read_only=read_only)
+    obj = view_object(model_admin, request, spec, object_id)
+    check_view_permission(model_admin, request, spec, obj)
     kwargs = clean_params(spec, request, data if data is not None else {})
 
     # a copy, so messages raised by the view are captured and returned instead of stored
@@ -450,9 +460,11 @@ __all__ = [
     "ViewNotSupported",
     "ViewSpec",
     "available_views",
+    "check_view_permission",
     "clean_params",
     "declared_views",
     "get_view",
     "run_view",
     "view",
+    "view_object",
 ]

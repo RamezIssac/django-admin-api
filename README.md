@@ -81,7 +81,7 @@ lines.
 | Endpoint | |
 |---|---|
 | `GET /api/v1/` | apps/models the user may use, with permissions |
-| `GET /api/v1/<app>/<model>/` | changelist: admin filters (`?status__exact=`), search `?q=`, ordering `?o=`, page `?p=`, `_per_page`, `_shape=columnar` |
+| `GET /api/v1/<app>/<model>/` | changelist: admin filters (`?status__exact=`), search `?q=`, ordering `?o=`, page `?p=`, `_per_page`, `_shape=columnar`; free-form lookups only on fields the API shows (`api_lookup_fields` to widen or narrow) |
 | `GET /api/v1/<app>/<model>/schema/` | columns, filters with their params, search, ordering, pagination, actions, `input_schema` (JSON Schema for create/update) |
 | `POST /api/v1/<app>/<model>/` | create, through the admin form + inline formsets |
 | `GET /api/v1/<app>/<model>/<pk>/` | detail: fieldsets (or `api_detail_fields`) + inlines |
@@ -151,10 +151,14 @@ e-mails during a dry run (or use `transaction.on_commit`, which a dry run discar
   their dry runs. The saved document is read back first, so values written by signals are included.
 - **Require a dry run.** `AdminMcpSite(api_site, require_dry_run=True)` makes `create_object`,
   `update_object` and write views refuse a real write unless it passes the `confirm_token` that a
-  valid dry run of the same arguments returned (same user, model, pk and data, valid 15 minutes).
+  valid dry run of the same arguments returned. The token works once, within 15 minutes, for the
+  same user, API token, model, pk and data, and only while the object's stored row is unchanged.
+  Permissions are checked first: a user who may not write gets 403, not 409.
   An admin overrides the site with `mcp_require_dry_run = True | False`. `delete_object` keeps its
   `confirm`; `run_action` has no dry run and is not gated.
 - **Audit.** The LogEntry of an MCP create or update reads, for example, `Changed Status. Via MCP.`
+  Every tool call is logged at INFO to the `admin_api.mcp.audit` logger: tool, user pk, token
+  prefix, IP, model, pk, view, `dry_run` and the outcome (`ok` or the error code), without `data`.
 
 ## Custom views (custom admin pages)
 

@@ -157,6 +157,30 @@ def test_list_objects_search_and_bad_args(call, data):
     assert err and out["error"] == "invalid_arguments"
 
 
+def test_lookups_on_hidden_fields_are_refused(call, data, monkeypatch):
+    """A free-form lookup on a field the API does not show is refused (a prefix oracle on secrets)."""
+    Client.objects.filter(pk=data["client"].pk).update(notes="pin 4711")
+    monkeypatch.setattr(testadmin.ClientAdmin, "api_fields", ["name"], raising=False)
+    out, err = call("list_objects", {"model": "testapp.client", "filters": {"notes__startswith": "pin 4"}})
+    assert err and out["error"] == "bad_lookup", out
+    out, err = call("list_objects", {"model": "testapp.client", "filters": {"name__startswith": "Ah"}})
+    assert not err and out["count"] == 1
+
+
+def test_lookups_follow_api_lookup_fields(call, data, monkeypatch):
+    monkeypatch.setattr(testadmin.ClientAdmin, "api_fields", ["name"], raising=False)
+    monkeypatch.setattr(testadmin.ClientAdmin, "api_lookup_fields", ["notes"], raising=False)
+    out, err = call("list_objects", {"model": "testapp.client", "filters": {"notes__startswith": "x"}})
+    assert not err and out["count"] == 0
+    out, err = call("list_objects", {"model": "testapp.client", "filters": {"name__startswith": "Ah"}})
+    assert err and out["error"] == "bad_lookup"
+
+
+def test_lookups_on_shown_fields_are_allowed(call, data):
+    out, err = call("list_objects", {"model": "testapp.sales", "filters": {"value__gte": 300, "slug__startswith": "S"}})
+    assert not err and out["count"] == 3
+
+
 def test_get_object(call, data):
     sale = data["sales"][0]
     out, err = call("get_object", {"model": "testapp.sales", "pk": sale.pk})
@@ -296,3 +320,19 @@ def test_request_flags_and_unexpected_errors(rf, superuser, data):
         "error": "server_error",
         "detail": "The tool failed; see the server log.",
     }
+
+
+def test_every_call_is_audited_without_payloads(call, data, caplog, superuser):
+    caplog.set_level("INFO", logger="admin_api.mcp.audit")
+    out, err = call(
+        "update_object",
+        {"model": "testapp.client", "pk": data["client"].pk, "data": {"name": "s3cret"}, "dry_run": True},
+        scopes=["testapp.client:change"],
+    )
+    call("get_object", {"model": "testapp.sales", "pk": 404})
+    first, second = (r.mcp_audit for r in caplog.records if r.name == "admin_api.mcp.audit")
+    assert first["tool"] == "update_object" and first["user"] == superuser.pk and first["dry_run"] is True
+    assert first["token"] and first["ip"] == "127.0.0.1" and first["model"] == "testapp.client"
+    assert not err and first["outcome"] == "ok", out
+    assert second["outcome"] == "not_found" and second["pk"] == 404
+    assert "s3cret" not in caplog.text

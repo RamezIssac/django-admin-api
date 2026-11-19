@@ -12,6 +12,7 @@ from ..mixins import ApiAdminMixin
 from .tools import ToolResult, ToolSpec
 
 logger = logging.getLogger("admin_api.mcp")
+audit_logger = logging.getLogger("admin_api.mcp.audit")
 
 _all_sites: WeakSet = WeakSet()
 
@@ -32,7 +33,8 @@ permissions; validation and business rules are the admin's own.
 columns, actions and the JSON Schema for create/update.
 3. Prefer dry_run=true on create_object/update_object before the real write. Write results include the \
 saved document's 'totals' when the admin declares them. When the server requires a dry run, a real \
-write is refused unless you pass the confirm_token returned by a valid dry run of the same write.
+write is refused unless you pass the confirm_token returned by a valid dry run of the same write. \
+A confirm_token works once and only while the object is unchanged: dry-run again before each write.
 4. delete_object only deletes with confirm=true; without it you get a preview.
 5. Some models have custom views (reports, statements, computed pages, business operations), listed under 'views' by list_models and described (parameters) by describe_model. Run them with run_view; some are also published as their own tools.
 Errors come back with the same envelope as the REST API (error, detail, fields, \
@@ -162,7 +164,13 @@ class AdminMcpSite:
         return request
 
     def call_tool(self, request, name: str, arguments: dict | None) -> ToolResult:
-        """Run a tool for ``request.user``. Errors become ``is_error`` results with the REST envelope."""
+        """Run a tool for ``request.user``. Errors become ``is_error`` results with the REST envelope.
+        Every call is logged to ``admin_api.mcp.audit`` (see :func:`audit`)."""
+        result = self._call_tool(request, name, arguments)
+        audit(request, name, arguments, result)
+        return result
+
+    def _call_tool(self, request, name: str, arguments: dict | None) -> ToolResult:
         self.prepare_request(request)
         tool = self.get_tool(name, request)
         if tool is None:
@@ -188,6 +196,30 @@ class AdminMcpSite:
     @property
     def urls(self):
         return self.get_urls(), "admin_mcp", self.name
+
+
+def audit(request, name: str, arguments, result: ToolResult) -> None:
+    """One INFO record per tool call: who, from where, which tool and target, and the outcome.
+    Leaves out ``data``, ``params`` and ``confirm_token``, which may carry secrets."""
+    args = arguments if isinstance(arguments, dict) else {}
+    token = getattr(request, "api_token", None)
+    record = {
+        "tool": name,
+        "user": getattr(getattr(request, "user", None), "pk", None),
+        "token": getattr(token, "prefix", None),
+        "ip": request.META.get("REMOTE_ADDR"),
+        "model": args.get("model"),
+        "pk": args.get("pk"),
+        "view": args.get("view"),
+        "dry_run": bool(args.get("dry_run")),
+        "outcome": result.data.get("error", "error") if result.is_error else "ok",
+    }
+    audit_logger.info(
+        "MCP %(tool)s user=%(user)s token=%(token)s ip=%(ip)s model=%(model)s pk=%(pk)s view=%(view)s "
+        "dry_run=%(dry_run)s outcome=%(outcome)s",
+        record,
+        extra={"mcp_audit": record},
+    )
 
 
 def _error(exc: ApiError) -> dict:

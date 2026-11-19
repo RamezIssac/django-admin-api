@@ -367,12 +367,22 @@ def _load(payload):
     return payload() if callable(payload) else payload
 
 
-def create(model_admin, request, payload) -> dict:
-    from .writes import save_from_payload
-
+def check_add_permission(model_admin, request) -> None:
     if not model_admin.has_add_permission(request):
         raise PermissionDeniedError()
     scopes.check(request, model_admin.opts, "add")
+
+
+def check_change_permission(model_admin, request, obj) -> None:
+    if not model_admin.has_change_permission(request, obj):
+        raise PermissionDeniedError()
+    scopes.check(request, model_admin.opts, "change")
+
+
+def create(model_admin, request, payload) -> dict:
+    from .writes import save_from_payload
+
+    check_add_permission(model_admin, request)
     result, messages = save_from_payload(model_admin, request, None, _load(payload), change=False, partial=False)
     return _saved(model_admin, request, result, messages)
 
@@ -381,9 +391,7 @@ def update(model_admin, request, object_id, payload, *, partial: bool) -> dict:
     from .writes import save_from_payload
 
     obj = get_object(model_admin, request, object_id)
-    if not model_admin.has_change_permission(request, obj):
-        raise PermissionDeniedError()
-    scopes.check(request, model_admin.opts, "change")
+    check_change_permission(model_admin, request, obj)
     result, messages = save_from_payload(model_admin, request, obj, _load(payload), change=True, partial=partial)
     return _saved(model_admin, request, result, messages)
 
