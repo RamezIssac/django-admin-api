@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from weakref import WeakSet
 
+from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 
 from ..auth import TokenAuthenticator
@@ -13,6 +14,10 @@ from .tools import ToolResult, ToolSpec
 logger = logging.getLogger("admin_api.mcp")
 
 _all_sites: WeakSet = WeakSet()
+
+
+def mcp_enabled() -> bool:
+    return getattr(settings, "ADMIN_API_MCP_ENABLED", True)
 
 
 def all_mcp_sites():
@@ -40,8 +45,8 @@ class AdminMcpSite:
     Same admins, permissions, token scopes and write pipeline as the REST API. Hide an admin
     from MCP only with ``mcp_enabled = False``; give the LLM context with ``mcp_description``.
 
-    The tool layer has no dependency on the MCP SDK; the transports (``urls`` for Streamable
-    HTTP, ``manage.py mcp_serve`` for stdio) need ``pip install --pre "django-admin-api-mcp[mcp]"``.
+    The transports are ``urls`` (Streamable HTTP) and ``manage.py mcp_serve`` (stdio); both are
+    off when ``settings.ADMIN_API_MCP_ENABLED`` is False.
     """
 
     default_per_page = 25
@@ -174,7 +179,7 @@ class AdminMcpSite:
             logger.exception("MCP tool %s failed", name)
             return ToolResult({"error": "server_error", "detail": "The tool failed; see the server log."}, True)
 
-    # --- transports (need the [mcp] extra) -------------------------------------------------------
+    # --- transports ------------------------------------------------------------------------------
     def get_urls(self):
         from .views import mcp_urlpatterns
 

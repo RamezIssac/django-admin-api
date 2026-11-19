@@ -615,7 +615,7 @@ Phase 3:
 
 ## 14. MCP (milestones 9–15, as built)
 
-Decisions (phase 2): both transports; the official `mcp` SDK as an optional `[mcp]` extra,
+Decisions (phase 2): both transports; the official `mcp` SDK (a core dependency from 0.1.0a2; first an optional `[mcp]` extra, now gone),
 bridged into a sync Django view; 8 generic tools; permissions as the ceiling plus `dry_run`,
 delete `confirm` and a site-level `read_only`; no `mcp_` twin chain; API tokens only (OAuth
 later); scopes now; JSON Schema + `structuredContent`.
@@ -634,7 +634,7 @@ hint when it is missing. (The planned system check W002 was dropped: the URLconf
 loudly.)
 
 ```python
-# pip install --pre "django-admin-api-mcp[mcp]"     (mcp>=2.3,<3)
+# pip install --pre django-admin-api-mcp     (pulls in mcp>=2.3,<3)
 from admin_api.mcp import AdminMcpSite
 
 mcp_site = AdminMcpSite(api_site)            # read_only=False, server_name=…, instructions=…

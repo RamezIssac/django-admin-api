@@ -8,17 +8,9 @@ ASGI response is collected into an ``HttpResponse``.
 from __future__ import annotations
 
 from django.http import HttpResponse
+from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 
 from .server import current_request
-
-try:
-    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
-except ImportError as exc:  # pragma: no cover
-    from django.core.exceptions import ImproperlyConfigured
-
-    raise ImproperlyConfigured(
-        'The MCP transports need the official MCP SDK: pip install --pre "django-admin-api-mcp[mcp]"'
-    ) from exc
 
 
 def _scope(request, body: bytes) -> dict:

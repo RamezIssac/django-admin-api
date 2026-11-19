@@ -2,23 +2,15 @@
 
 from __future__ import annotations
 
+import anyio
 from django.contrib.auth.models import AnonymousUser
 from django.db import close_old_connections
 from django.test import RequestFactory
+from mcp.server.stdio import stdio_server
 
 from ..auth import get_token_model
 from ..writes import capture_messages
 from .server import build_server
-
-try:
-    import anyio
-    from mcp.server.stdio import stdio_server
-except ImportError as exc:  # pragma: no cover
-    from django.core.exceptions import ImproperlyConfigured
-
-    raise ImproperlyConfigured(
-        'The MCP transports need the official MCP SDK: pip install --pre "django-admin-api-mcp[mcp]"'
-    ) from exc
 
 
 class StdioRequestFactory:

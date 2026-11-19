@@ -4,6 +4,10 @@
 
 - The project is renamed to `django-admin-api-mcp` on PyPI from this release. The import name
   `admin_api` is unchanged.
+- The official `mcp` SDK is a core dependency and the `[mcp]` extra is gone: install with
+  `pip install --pre django-admin-api-mcp`.
+- `ADMIN_API_MCP_ENABLED` setting (default `True`): when `False`, the MCP HTTP view answers 404
+  `mcp_disabled` and `manage.py mcp_serve` exits with an error.
 - MCP `create_object` / `update_object` (and their dry runs) return the saved document's
   `totals`, declared per admin with `api_totals`. The object is reloaded after the save, so
   values written by signals are included (REST writes get the same reload and a `totals` entry).
@@ -26,7 +30,7 @@ by an unrelated package); the import package is `admin_api`.
 - `api_` twins and `request.is_api` for API-specific behaviour; mixin-less admins are wrapped
   at runtime (§3, R3.4).
 - Session + personal-access-token auth, tokens narrowed by scopes (15, R6, R7, §9.3).
-- MCP server (`[mcp]` extra): Streamable HTTP and stdio transports, generic tools with
+- MCP server: Streamable HTTP and stdio transports, generic tools with
   `dry_run`, JSON Schema write payloads, official-client conformance tests (§14).
 - Nested admins via django-subadmin; custom admin views via `@admin_api.view` (§15, §16).
 

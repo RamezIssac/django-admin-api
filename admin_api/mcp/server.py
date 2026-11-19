@@ -10,16 +10,9 @@ from __future__ import annotations
 import contextvars
 import json
 
-from django.core.exceptions import ImproperlyConfigured
-
-try:
-    import mcp_types as types
-    from asgiref.sync import sync_to_async
-    from mcp.server import Server
-except ImportError as exc:  # pragma: no cover - exercised without the extra installed
-    raise ImproperlyConfigured(
-        'The MCP transports need the official MCP SDK: pip install --pre "django-admin-api-mcp[mcp]"'
-    ) from exc
+import mcp_types as types
+from asgiref.sync import sync_to_async
+from mcp.server import Server
 
 # The Django request of the current MCP message (HTTP: the view's request; stdio: one per call).
 current_request: contextvars.ContextVar = contextvars.ContextVar("admin_api_mcp_request")

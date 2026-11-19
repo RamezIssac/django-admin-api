@@ -156,20 +156,12 @@ def test_under_asgi(superuser):
     assert out["count"] == 1 and out["rows"][0][1] == "Ahmed"
 
 
-def test_without_sdk_tool_layer_imports_and_transports_explain():
-    """Simulate a project without the [mcp] extra."""
-    import subprocess
-    import sys
+@override_settings(ADMIN_API_MCP_ENABLED=False)
+def test_endpoint_off_when_mcp_disabled(client, token):
+    resp = post(client, {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, token=token)
+    assert resp.status_code == 404
+    assert json.loads(resp.content)["error"] == "mcp_disabled"
 
-    code = (
-        "import sys; sys.modules['mcp'] = None; sys.modules['mcp_types'] = None\n"
-        "import django, os; os.environ['DJANGO_SETTINGS_MODULE'] = 'tests.settings'; django.setup()\n"
-        "from admin_api.mcp import AdminMcpSite\n"
-        "from django.core.exceptions import ImproperlyConfigured\n"
-        "try:\n"
-        "    import admin_api.mcp.views\n"
-        "except ImproperlyConfigured as exc:\n"
-        "    print('GUARD', exc)\n"
-    )
-    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True).stdout
-    assert 'GUARD The MCP transports need the official MCP SDK: pip install --pre "django-admin-api-mcp[mcp]"' in out
+
+def test_endpoint_on_by_default(client, token):
+    assert rpc(client, token, "tools/list", {})["result"]["tools"]

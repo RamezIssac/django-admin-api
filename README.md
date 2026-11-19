@@ -9,8 +9,7 @@
 client) — with the admin's own permissions, validation and audit trail.
 
 ```bash
-pip install --pre django-admin-api-mcp          # the REST API
-pip install --pre "django-admin-api-mcp[mcp]"   # + the MCP transports (the official MCP SDK)
+pip install --pre django-admin-api-mcp   # the REST API and the MCP server (pulls in the official MCP SDK)
 ```
 
 > **Why "-mcp"?** The `django-admin-api` name on PyPI is taken by an unrelated, inactive package, so
@@ -109,10 +108,6 @@ Design: [docs/DESIGN.md](docs/DESIGN.md).
 Let an AI agent (Claude Code, Claude Desktop, any MCP client) use the admin, with the same
 permissions, validation, ERP hooks and audit trail as the HTML admin.
 
-```bash
-pip install --pre "django-admin-api-mcp[mcp]"    # the official MCP SDK; the REST API doesn't need it
-```
-
 ```python
 # urls.py
 from admin_api.mcp import AdminMcpSite
@@ -130,6 +125,9 @@ claude mcp add erp -e ADMIN_API_TOKEN=aapi_… -- python manage.py mcp_serve
 # remote, HTTP
 claude mcp add --transport http erp https://erp.example.com/mcp/ --header "Authorization: Bearer aapi_…"
 ```
+
+Set `ADMIN_API_MCP_ENABLED = False` in settings to turn the MCP endpoints off (the HTTP view answers
+404 `mcp_disabled`, `manage.py mcp_serve` exits with an error). It defaults to `True`.
 
 Step by step, with scopes, `.mcp.json` and troubleshooting: [Connect Claude Code](docs/connect-claude-code.md).
 

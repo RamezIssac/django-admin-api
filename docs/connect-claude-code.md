@@ -8,7 +8,7 @@ Tokens below are placeholders (`aapi_...`).
 
 ## What you need
 
-1. `pip install --pre "django-admin-api-mcp[mcp]"` in the project (the import name is `admin_api`).
+1. `pip install --pre django-admin-api-mcp` in the project (the import name is `admin_api`).
 2. An `AdminMcpSite` in the URLconf:
 
    ```python
