@@ -9,6 +9,7 @@ from django.core.exceptions import ImproperlyConfigured
 from ..auth import TokenAuthenticator
 from ..errors import ApiError, NotAuthenticated, PermissionDeniedError
 from ..mixins import ApiAdminMixin
+from .resolve import LiveEntityBackend
 from .tools import ToolResult, ToolSpec
 
 logger = logging.getLogger("admin_api.mcp")
@@ -37,6 +38,13 @@ write is refused unless you pass the confirm_token returned by a valid dry run o
 A confirm_token works once and only while the object is unchanged: dry-run again before each write.
 4. delete_object only deletes with confirm=true; without it you get a preview.
 5. Some models have custom views (reports, statements, computed pages, business operations), listed under 'views' by list_models and described (parameters) by describe_model. Run them with run_view; some are also published as their own tools.
+6. Before you filter, report or write with a name the user typed, call resolve_entities and use the ids it \
+returns. A word naming a kind of record ('invoices', 'clients') resolves under 'models'; use that model with \
+list_objects or its views. Each list has a status. \
+'unique': for a read, use it and name its label in your answer; for a write, use it only when its match is \
+'exact' or 'exact_code', otherwise ask. 'ambiguous': ask the user to pick, listing each candidate's label and \
+model. 'none': tell the user nothing matched. Note: offer the unfiltered answer, not a guessed filter or field, \
+because a guessed filter returns wrong numbers.
 Errors come back with the same envelope as the REST API (error, detail, fields, \
 non_field_errors, inlines)."""
 
@@ -54,6 +62,9 @@ class AdminMcpSite:
     default_per_page = 25
     confirm_token_max_age = 900  # seconds a dry run's confirm_token stays valid
     instructions = DEFAULT_INSTRUCTIONS
+    # app labels or "app_label.model_name" that resolve_entities never searches
+    excluded_models = ("auth", "sessions", "contenttypes", "admin", "admin_api")
+    entity_backend_class = LiveEntityBackend
     # Bearer tokens only: MCP clients are not browsers, and a session cookie must not be enough.
     authenticators = [TokenAuthenticator]
 
@@ -66,6 +77,7 @@ class AdminMcpSite:
         server_name: str | None = None,
         instructions: str | None = None,
         require_dry_run: bool = False,
+        excluded_models=None,
     ):
         self.api_site = api_site
         self.name = name
@@ -74,6 +86,8 @@ class AdminMcpSite:
         self.require_dry_run = require_dry_run
         if instructions is not None:
             self.instructions = instructions
+        if excluded_models is not None:
+            self.excluded_models = tuple(excluded_models)
         _all_sites.add(self)
 
     # --- policy hooks (override in a subclass) -------------------------------------------------
@@ -99,6 +113,10 @@ class AdminMcpSite:
         (``True``/``False``) overrides the site's ``require_dry_run``."""
         override = getattr(model_admin, "mcp_require_dry_run", None)
         return self.require_dry_run if override is None else bool(override)
+
+    def get_entity_backend(self):
+        """The backend ``resolve_entities`` finds candidates with (default: each admin's own search)."""
+        return self.entity_backend_class(self)
 
     @property
     def confirm_salt(self) -> str:

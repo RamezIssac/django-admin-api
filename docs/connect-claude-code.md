@@ -126,7 +126,7 @@ erp: https://erp.example.com/mcp/ (HTTP) - ✔ Connected
 ```
 
 Inside a session, `/mcp` shows the server and its tools. The server offers `list_models`, `describe_model`, `list_objects`,
-`get_object`, `create_object`, `update_object`, `delete_object`, `run_action`, `run_view`, plus
+`resolve_entities`, `get_object`, `create_object`, `update_object`, `delete_object`, `run_action`, `run_view`, plus
 one tool per view published with `mcp_tool=`. A `read_only=True` site lists only the read tools.
 
 ## A first session

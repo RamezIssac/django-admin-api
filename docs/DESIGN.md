@@ -767,6 +767,51 @@ the lowest Python it supports within our range (3.10 / 3.12 / 3.13), plus a `lin
 
 ---
 
+### 14.9 Resolving names (0.1.0a4)
+
+Users type names ("john", "invoices"), tools take ids. `resolve_entities` closes that gap
+across every model the user can see, in one read-only call.
+
+- **Contract.** `terms[]` of `{text, kind?, models?, for_field?}`, `limit` (default 5, cap 20).
+  Per term: `objects` and `models`, each `{status, more, candidates}`; `objects` also lists
+  `searched_models`. `kind` (`any`, `objects`, `models`) picks the lists; `models` and
+  `for_field` imply `objects`. Object candidates: `model`, `id`, `label` (`str(obj)` read from
+  the scoped queryset), `confidence`, `match`, `matched_field`. Model candidates: `model`,
+  `label`, `language`, `confidence`, `match`. No other field values leave the server.
+- **Two lists.** A model name and an object name can both match one word ("server": the model
+  and the object "Server Maintenance"); each list gets its own status, so a label hit never
+  decides an object's status.
+- **Allowed set**, per request: admins exposed to MCP, `has_view_or_change_permission`, token
+  scope `view`, not in `AdminMcpSite.excluded_models` (app labels or `app_label.model_name`;
+  default `auth`, `sessions`, `contenttypes`, `admin`, `admin_api`). Objects come from the admin's
+  `get_queryset(request)` and its live `get_search_fields(request)`. An unknown, hidden or
+  excluded model in `models` is skipped the same way, and a hidden `for_field` source or target
+  answers the same 404 as an unknown one.
+- **`for_field`**: `{model, field}` with a relation field of the add form or
+  `inlines.<prefix>.<field>`; the target is the related admin's queryset with the form field's
+  `limit_choices_to`, as Django's autocomplete does. With `to_field_name`, `id` is that field.
+- **Match and confidence** (casefolded, whitespace collapsed): `exact` 1.0, `exact_code` 0.95
+  (field named `slug`, `code`, `reference`, `ref_number`), `prefix` 0.85, `word` 0.8,
+  `word_prefix` 0.75, `contains` 0.6, `search` 0.5 (the admin's search found the row, no single
+  field holds the whole term). A candidate scores its best field.
+- **Status**, computed over all scored candidates before `limit`: `none` without candidates; with
+  `exact` / `exact_code` candidates, `unique` when exactly one is; else `unique` when exactly one
+  candidate reaches 0.7; else `ambiguous`. The instructions turn it into behaviour: reads use any
+  `unique`, writes only an `exact` / `exact_code` `unique`, `ambiguous` and `none` ask.
+- **Backend seam.** `AdminMcpSite.get_entity_backend()` (class attribute `entity_backend_class`)
+  returns the object that finds candidates: `search_objects(request, term, targets)` returns
+  scored hits plus a "scan capped" flag, `search_models(request, term, targets)` returns model
+  hits. The tool keeps the contract, the allowed set, the status and the labels. The default
+  `LiveEntityBackend` runs `get_search_results` over each target queryset on any database,
+  fetches the exact (`iexact`) rows first, then scores at most `scan_limit` (200) rows per model.
+  Model names are matched under every `settings.LANGUAGES` code when the project sets it, else
+  the active language and `LANGUAGE_CODE`.
+- Rejected: one `list_objects` call per model (the agent must guess the models, gets no ranking,
+  and hidden rows of other admins stay unscoped in reports); a fuzzy match on the default manager
+  (ignores the admin's `get_queryset`); a single merged list (a model name decides an object's
+  status).
+- Tests: `tests/test_mcp_resolve.py`.
+
 ## 15. Nested admins (milestone 17, as built)
 
 Goal: admins nested with django-subadmin (`SubAdmin` hung off a registered `RootSubAdmin`, any
