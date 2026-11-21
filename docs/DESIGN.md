@@ -812,6 +812,76 @@ across every model the user can see, in one read-only call.
   status).
 - Tests: `tests/test_mcp_resolve.py`.
 
+### 14.10 Search index (`admin_api.contrib.search`)
+
+An opt-in app (`INSTALLED_APPS`, label `admin_api_search`) that stores searchable text for
+`resolve_entities`. A REST-only project does not get its table, signals or migrations.
+
+| Concern | Owner |
+|---|---|
+| Which rows exist: field derivation, label rows, aliases, `fold()`, signals, rebuild, `ensure` | `indexer.py`, `fold.py` |
+| Allowed set, match and confidence from `norm`, `status`, live labels | `admin_api/mcp/resolve.py` (tool), `backend.py` |
+| Storing rows, finding candidates, fuzzy ordering | the engine (`engines/`) |
+
+- **Rows.** Object rows: one per (object, field) for each MCP-exposed admin minus
+  `excluded_models`, from its `search_fields` and `api_search_fields` reduced to local
+  `CharField` / `TextField` / integer / decimal fields (prefixes and lookups stripped; relation
+  paths, dates, booleans skipped). `get_search_index_fields()` on the admin replaces that list.
+  Empty values make no row. Model rows: `verbose_name`, `verbose_name_plural`, `model_name` and
+  `search_aliases[code]` under every `LANGUAGES` code, one row per (model, folded text).
+- **Row identity.** `content_type` is the django-polymorphic leaf when the model has
+  `polymorphic_ctype`, else the model of the admin the object belongs to (the class itself, or its
+  nearest registered ancestor for a multi-table child without an admin). `object_pk` is
+  `str(pk)`.
+- **Folding** (`fold()`, Python, both sides): NFKC; Arabic alef forms to ا, ى to ي, ة to ه, ؤ to
+  و, ئ to ي, tatweel dropped, Persian kaf and yeh, Arabic-Indic and Persian digits to 0-9; NFKD and
+  combining marks dropped; casefold; whitespace collapsed; a leading "ال" stripped from each word
+  that keeps 2 letters.
+- **Freshness.** `post_save` (one receiver, any sender, checked against the indexed models) upserts
+  on commit and deletes rows of fields now empty; errors are logged, never raised into the save.
+  No `post_delete` receiver: it would disable Django's fast delete for every model, and the
+  query-time `EXISTS` hides deleted objects. `post_migrate` replaces the model rows.
+  `rebuild_search_index` iterates each model's base manager in batches (one transaction each,
+  progress per batch), then prunes rows of that model not written by the run. `search_index
+  ensure` refreshes model rows and rebuilds models whose fingerprint (index fields, `LANGUAGES`,
+  engine, `INDEX_FORMAT`) differs from `SearchIndexState`; models no longer indexed lose their
+  rows.
+- **Engines.** `ADMIN_API_SEARCH = {"DEFAULT_ENGINE": ..., "ENGINES": {name: {"BACKEND", "OPTIONS"}}}`
+  merged over the `db` default. Interface `engines.base.SearchEngine`: `upsert(entries)`,
+  `delete_rows(content_type, object_pk, fields=None)`, `replace_model_rows(rows)`,
+  `prune(content_types, older_than)`, `search(query) -> list[Hit]`, `fuzzy_confidence(hit)`, flags
+  `fuzzy` and `scope_pushdown`. `Hit` carries `content_type`, `object_pk`, `field`, `norm`,
+  `engine_score`. One engine holds the rows; with an external engine the table stays empty.
+- **Query.** The backend turns the tool's targets into scopes (content types incl. owned
+  subclasses, the live search fields, code fields, the target queryset with `limit_choices_to`)
+  and asks for `limit + 1` candidates (at least 2: enough to tell `unique` from `ambiguous`).
+  Engines with `scope_pushdown` scope inside the query. The others get the post-filter path: pages
+  of `5 x (limit + 1)` hits, kept when `get_queryset(request).filter(pk__in=...)` holds them, at
+  most 3 pages. The core rescores each hit from `norm` with the tool's `match_text`; anything else
+  is `fuzzy` at `0.6 x fuzzy_confidence(hit)`. Labels stay `str(obj)` from the scoped queryset;
+  stored `text` never leaves the server. Model labels are read live under the row's language.
+- **`db` engine.** Table `admin_api_search_entry` (`kind`, `content_type`, `object_pk`, `field`,
+  `language`, `text`, `norm`, `updated_at` moved only when `norm` changes, `indexed_at` moved on
+  every write for prune), unique (`content_type`, `object_pk`, `field`, `language`), btree
+  (`content_type`, `object_pk`). On Postgres the migration runs `CREATE EXTENSION IF NOT EXISTS
+  pg_trgm` and a GIN `gin_trgm_ops` index on `norm` (skipped with a warning when the role may not
+  create the extension). Upserts are `INSERT ... ON CONFLICT DO UPDATE` on Postgres and SQLite.
+  Pass 1: `norm = q` or `LIKE '%q%'` (terms under 3 characters: exact and prefix), ranked in SQL by
+  the match tiers, then `updated_at`, content type and pk. Pass 2 (Postgres with `pg_trgm`, only
+  when pass 1 found fewer candidates than asked): `q <% norm` under
+  `set_config('pg_trgm.word_similarity_threshold', 0.4, true)`, ordered by `word_similarity`.
+  Scoping: per target `content_type IN (...) AND field IN (...) AND EXISTS (target queryset WHERE
+  pk = CASE WHEN content_type IN (...) THEN object_pk::bigint END)`; the guard keeps the cast off
+  rows of other models, the cast on the outer side keeps the inner pk index usable.
+- **Database ctype.** pg_trgm splits words by the database `LC_CTYPE`; under `C` or `POSIX` Arabic
+  words yield no trigrams. Check `admin_api_search.W001` (database tag) warns, `search_index
+  ensure` exits non-zero.
+- Not indexed: relation paths (`client__name`), rows changed by `QuerySet.update()`, bulk writes,
+  `loaddata` and raw SQL until the next rebuild.
+- Tests: `tests/test_search_fold.py`, `test_search_index.py`, `test_search_resolve.py`,
+  `test_search_engines.py` (settings, an in-memory engine without `scope_pushdown`),
+  `test_search_postgres.py` (nox `tests_postgres`, CI job `postgres` on Postgres 17).
+
 ## 15. Nested admins (milestone 17, as built)
 
 Goal: admins nested with django-subadmin (`SubAdmin` hung off a registered `RootSubAdmin`, any
