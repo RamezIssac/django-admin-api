@@ -63,11 +63,12 @@ def test_default_instructions_ask_for_business_language():
     assert "not its 'model' path" in DEFAULT_INSTRUCTIONS
     assert 'Say "ID" only when the user asks or two records share a label.' in DEFAULT_INSTRUCTIONS
     assert "listing each candidate's label and the kind of record." in DEFAULT_INSTRUCTIONS
+    assert "'ambiguous': ask which one before running anything (not a run per candidate)" in DEFAULT_INSTRUCTIONS
     assert "label and model" not in DEFAULT_INSTRUCTIONS
 
 
 def test_default_instructions_stay_short():
-    assert len(DEFAULT_INSTRUCTIONS) <= 2100
+    assert len(DEFAULT_INSTRUCTIONS) <= 2045
 
 
 def test_get_instructions_hook_answers_initialize(rf, superuser):
