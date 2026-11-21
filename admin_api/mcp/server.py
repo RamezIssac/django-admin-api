@@ -41,11 +41,11 @@ def _tool(spec) -> types.Tool:
     return types.Tool.model_validate(data)
 
 
-def build_server(mcp_site, request_factory=None) -> Server:
+def build_server(mcp_site, request_factory=None, *, instructions: str | None = None) -> Server:
     """An SDK ``Server`` whose tools are ``mcp_site``'s.
 
     ``request_factory()`` returns the Django request for a message; by default the request
-    stored in :data:`current_request` by the HTTP view.
+    stored in :data:`current_request` by the HTTP view. ``instructions`` defaults to the site's.
     """
     get_request = request_factory or current_request.get
 
@@ -70,7 +70,7 @@ def build_server(mcp_site, request_factory=None) -> Server:
     return Server(
         mcp_site.server_name,
         version=_version(),
-        instructions=mcp_site.instructions,
+        instructions=mcp_site.instructions if instructions is None else instructions,
         on_list_tools=on_list_tools,
         on_call_tool=on_call_tool,
     )

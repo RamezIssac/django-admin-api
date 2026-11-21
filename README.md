@@ -145,6 +145,28 @@ On the admin: `mcp_description = "…"` (context for the LLM; a string or a call
 `request.is_dry_run` to skip side effects such as
 e-mails during a dry run (or use `transaction.on_commit`, which a dry run discards).
 
+### Business wording
+
+The default server instructions ask the agent to talk in business language: kinds of records by
+their verbose `name`, records by their `label`, "ID" only when needed. The tools answer the same
+way: records carry `id` and `label` (REST keeps `pk` and `str`), related records are
+`{"id", "label"}`, and messages use verbose names (`"No sales with ID 9."`, `"You may not change
+this sales."`, `"This kind of record is not available here."`). The arguments `pk` and `pks` are
+still accepted as aliases of `id` and `ids` for one release. A `list_objects` search that finds
+nothing returns `searched_fields`, `id_filters` (e.g. `client__id__exact`) and a `hint` to filter
+by a resolved ID.
+
+Two hooks on `AdminMcpSite` adapt this per request:
+
+```python
+class ErpMcpSite(AdminMcpSite):
+    def get_instructions(self, request):   # sent at initialize; default: self.instructions
+        return self.instructions + "\nAnswer in English."
+
+    def get_language(self, request):       # tool calls and tool lists run in it; default None
+        return "ar"                        # None keeps the active language (LocaleMiddleware)
+```
+
 ### Resolving names
 
 `resolve_entities` turns the words a user typed into ids before the agent filters, reports or
@@ -185,7 +207,7 @@ A top-level `models` applies to every term without its own `models` or `for_fiel
 - **Require a dry run.** `AdminMcpSite(api_site, require_dry_run=True)` makes `create_object`,
   `update_object` and write views refuse a real write unless it passes the `confirm_token` that a
   valid dry run of the same arguments returned. The token works once, within 15 minutes, for the
-  same user, API token, model, pk and data, and only while the object's stored row is unchanged.
+  same user, API token, model, ID and data, and only while the object's stored row is unchanged.
   Permissions are checked first: a user who may not write gets 403, not 409.
   An admin overrides the site with `mcp_require_dry_run = True | False`. `delete_object` keeps its
   `confirm`; `run_action` has no dry run and is not gated.
@@ -247,7 +269,7 @@ The response is `{"view", "pk" (detail), "result", "messages"}`. Errors use the 
 
 **How an agent finds them.** The MCP server instructions mention custom views; `list_models`
 lists each model's views (name, description, `detail`, `writes`); `describe_model` gives each
-view's `params_schema`; `get_object` names the views of that object; `run_view(model, view, pk?,
+view's `params_schema`; `get_object` names the views of that object; `run_view(model, view, id?,
 params, dry_run)` runs any of them. Views the agent uses often can also be published as their own
 tool with `mcp_tool=` (typed arguments, listed in `tools/list` only for users who may run them).
 REST clients get the same from `/schema/` (`views`, with `url` and `methods`) and object

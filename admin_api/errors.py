@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 from django.http import JsonResponse
+from django.utils.translation import gettext, gettext_noop
 
 
 class ApiError(Exception):
     status = 400
     code = "bad_request"
+    default_detail: str | None = None  # marked with gettext_noop, translated when raised
 
     def __init__(self, detail: str | None = None, *, status: int | None = None, code: str | None = None, **extra):
+        if detail is None and self.default_detail:
+            detail = gettext(self.default_detail)
         super().__init__(detail or self.code)
         self.detail = detail
         if status is not None:
@@ -37,6 +41,7 @@ class NotAuthenticated(ApiError):
 class PermissionDeniedError(ApiError):
     status = 403
     code = "permission_denied"
+    default_detail = gettext_noop("You do not have permission to do this.")
 
 
 class NotFound(ApiError):

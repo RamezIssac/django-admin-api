@@ -44,7 +44,7 @@ class StdioRequestFactory:
 
 def serve(mcp_site, request_factory) -> None:
     """Serve ``mcp_site`` on stdin/stdout until the client disconnects."""
-    server = build_server(mcp_site, request_factory)
+    server = build_server(mcp_site, request_factory, instructions=mcp_site.get_instructions(request_factory()))
 
     async def main():
         async with stdio_server() as (read_stream, write_stream):
