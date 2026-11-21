@@ -54,6 +54,7 @@ def test_tools_catalogue(mcp):
         "list_models",
         "describe_model",
         "list_objects",
+        "resolve_entities",
         "get_object",
         "create_object",
         "update_object",
@@ -68,6 +69,7 @@ def test_tools_catalogue(mcp):
         "list_models",
         "describe_model",
         "list_objects",
+        "resolve_entities",
         "get_object",
         "run_view",
         "client_statement",  # post_sale writes: hidden

@@ -24,6 +24,11 @@ class ApiError(Exception):
         return JsonResponse(payload, status=self.status)
 
 
+class InvalidArguments(ApiError):
+    status = 400
+    code = "invalid_arguments"
+
+
 class NotAuthenticated(ApiError):
     status = 401
     code = "not_authenticated"

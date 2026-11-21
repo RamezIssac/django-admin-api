@@ -1,6 +1,24 @@
 # Changelog
 
-## 0.1.0a3 (unreleased)
+## 0.1.0a4 (unreleased)
+
+- **New MCP tool `resolve_entities`** (read-only, §14.9): names the user typed become object ids and model
+  labels across every model the user can see. Each term returns an `objects` and a `models` list,
+  each with `status` `unique`, `ambiguous` or `none` and ranked candidates (`match`, `confidence`,
+  `matched_field`, `label` as `str(obj)`). Terms take `kind` (`any`, `objects`, `models`),
+  `models` (a top-level `models` is the default for terms without their own), and `for_field` (a create/update relation field or `inlines.<prefix>.<field>`, with the
+  field's `limit_choices_to`). Candidates come from each admin's `get_search_results` over its
+  `get_queryset(request)`, with its permissions, token scopes and live search fields.
+- `AdminMcpSite.excluded_models` (and the `excluded_models=` argument): app labels or
+  `app_label.model_name` that `resolve_entities` never searches. Default: `auth`, `sessions`,
+  `contenttypes`, `admin`, `admin_api`.
+- `AdminMcpSite.get_entity_backend()` / `entity_backend_class`: the backend that finds
+  candidates. The default `LiveEntityBackend` uses the admin's own search on any database.
+- The default MCP instructions gain line 6: resolve names with `resolve_entities` first; reads use
+  any `unique` result, writes only an `exact` or `exact_code` one, `ambiguous` and `none` ask.
+- `InvalidArguments` moved to `admin_api.errors`; `admin_api.mcp.handlers` still imports it.
+
+## 0.1.0a3 (2026-11-19)
 
 - **The MCP `confirm_token` is single-use and bound to the object's state.** It was a stateless
   signature, valid 15 minutes for any number of writes: one dry run allowed repeated writes, from

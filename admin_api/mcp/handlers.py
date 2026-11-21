@@ -14,10 +14,11 @@ from django.http import QueryDict
 
 from .. import custom_views, services
 from ..changelist import PER_PAGE_PARAM, SHAPE_PARAM, describe_columns, get_columns
-from ..errors import ApiError, NotFound, PermissionDeniedError
+from ..errors import InvalidArguments, NotFound, PermissionDeniedError
 from ..nested import ModelPath
 from ..writes import ValidationFailed
 from . import confirm
+from .resolve import MAX_LIMIT, MAX_TERMS, resolve_entities
 from .tools import (
     ANY_OBJECT,
     CONFIRM_TOKEN_ARG,
@@ -32,11 +33,6 @@ from .tools import (
 )
 
 RESERVED_FILTER_KEYS = frozenset({SEARCH_VAR, ORDER_VAR, PAGE_VAR, SHAPE_PARAM, PER_PAGE_PARAM, "all"})
-
-
-class InvalidArguments(ApiError):
-    status = 400
-    code = "invalid_arguments"
 
 
 # --------------------------------------------------------------------------------------------
@@ -509,6 +505,62 @@ TOOLS = [
         ),
         output_schema=ANY_OBJECT,
         handler=list_objects,
+        annotations=READ,
+    ),
+    ToolSpec(
+        name="resolve_entities",
+        title="Resolve names to ids",
+        description="Turn names the user typed into object ids and models, across every model you can see. "
+        "Each term returns 'objects' (records whose search fields match) and 'models' (models whose name "
+        "matches, e.g. 'invoices'), each with status 'unique', 'ambiguous' or 'none' and ranked candidates. "
+        "Use it before filtering, reporting or writing with a name.",
+        input_schema=obj(
+            {
+                "terms": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": MAX_TERMS,
+                    "items": obj(
+                        {
+                            "text": {"type": "string", "description": "The user's words, unchanged."},
+                            "kind": {
+                                "enum": ["any", "objects", "models"],
+                                "default": "any",
+                                "description": "Search objects, models or both.",
+                            },
+                            "models": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Only these models (e.g. a parameter's x-related-model).",
+                            },
+                            "for_field": obj(
+                                {
+                                    "model": {"type": "string", "description": "The model being written."},
+                                    "field": {
+                                        "type": "string",
+                                        "description": "A relation field of its input_schema, or "
+                                        "'inlines.<prefix>.<field>' for an inline row field.",
+                                    },
+                                },
+                                ["model", "field"],
+                                description="Resolve a value for this create/update field: searches the "
+                                "related model, with the field's own choice limits.",
+                            ),
+                        },
+                        ["text"],
+                    ),
+                },
+                "models": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Default 'models' for every term without its own 'models' or 'for_field'.",
+                },
+                "limit": {"type": "integer", "minimum": 1, "maximum": MAX_LIMIT, "default": 5},
+            },
+            ["terms"],
+        ),
+        output_schema=ANY_OBJECT,
+        handler=resolve_entities,
         annotations=READ,
     ),
     ToolSpec(

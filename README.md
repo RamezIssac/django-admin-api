@@ -132,7 +132,8 @@ Set `ADMIN_API_MCP_ENABLED = False` in settings to turn the MCP endpoints off (t
 Step by step, with scopes, `.mcp.json` and troubleshooting: [Connect Claude Code](docs/connect-claude-code.md).
 
 Tools: `list_models`, `describe_model` (columns, filters, actions, custom views, JSON Schema),
-`list_objects` (admin filters, search, ordering, paging), `get_object`, `create_object` /
+`list_objects` (admin filters, search, ordering, paging), `resolve_entities` (names to ids and
+models), `get_object`, `create_object` /
 `update_object` (with `dry_run`: the full save pipeline, then rolled back), `delete_object`
 (preview unless `confirm=true`), `run_action`, `run_view` (custom views), plus one tool per view
 published with `mcp_tool=`.
@@ -143,6 +144,38 @@ On the admin: `mcp_description = "…"` (context for the LLM; a string or a call
 `def get_mcp_description(self, request): return self.description`. In hooks: `request.is_mcp`, and
 `request.is_dry_run` to skip side effects such as
 e-mails during a dry run (or use `transaction.on_commit`, which a dry run discards).
+
+### Resolving names
+
+`resolve_entities` turns the words a user typed into ids before the agent filters, reports or
+writes. Each term returns two lists, `objects` and `models` ("clients" names a model), each with a
+`status` of `unique`, `ambiguous` or `none` and ranked candidates (`model`, `id`, `label`,
+`confidence`, `match`, `matched_field`).
+
+```json
+{"terms": [{"text": "ahmed", "for_field": {"model": "store.payment", "field": "client"}},
+           {"text": "S-1", "models": ["store.sales"]},
+           {"text": "invoices", "kind": "models"}],
+ "models": ["store.client"],
+ "limit": 5}
+```
+
+A top-level `models` applies to every term without its own `models` or `for_field`.
+
+- Objects come from each admin's own `get_search_results` over its `get_queryset(request)`, with
+  its live `get_search_fields(request)`; models must be MCP-exposed, viewable by the user and
+  allowed by the token scopes. `for_field` (a relation field, or `inlines.<prefix>.<field>`)
+  searches the related admin with the field's `limit_choices_to`.
+- Match and confidence: `exact` 1.0, `exact_code` 0.95 (`slug`, `code`, `reference`,
+  `ref_number`), `prefix` 0.85, `word` 0.8, `word_prefix` 0.75, `contains` 0.6, `search` 0.5 (found
+  by the admin's search, no single field holds the whole term).
+- `status`: `none` without candidates; with `exact` or `exact_code` candidates, `unique` when there
+  is exactly one of them; otherwise `unique` when exactly one candidate reaches 0.7.
+- `AdminMcpSite(api_site, excluded_models=[...])` takes app labels or `app_label.model_name`; the
+  default is `auth`, `sessions`, `contenttypes`, `admin` and `admin_api`. The list replaces the
+  default.
+- The search runs through `AdminMcpSite.get_entity_backend()`; the default `LiveEntityBackend` needs
+  no index and works on any database.
 
 ### Safer writes
 
