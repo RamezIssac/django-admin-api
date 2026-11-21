@@ -36,6 +36,16 @@
 - `AdminMcpSite.get_instructions(request)` (sent at `initialize`; the HTTP view builds one SDK
   `Server` per request) and `AdminMcpSite.get_language(request)` (default `None`: keep the active
   language), which wraps `call_tool` and `get_tools` in `translation.override`.
+- **Per-user MCP memory.** New model `admin_api.McpUserMemory` (migration `0003`) with
+  `preference` and `picked` rows per user, and `McpUserMemoryAdmin` (own rows; superusers all).
+  Preferences `audience` (`business` default, `developer`), `language` and `notes` are loaded
+  once per request into `request.mcp_memory` by `AdminMcpSite.get_user_memory(request)`.
+  `get_instructions` now swaps the business-wording paragraph for a developer one and appends
+  the user's language and notes; `get_language` returns the user's language.
+  `AdminMcpSite.prepare_request` is an instance method now.
+- New MCP tool `set_preference(key, value)`: stores or clears one of the caller's preferences.
+- New command `manage.py prune_mcp_memory [--days 180] [--batch-size 1000] [--dry-run]`: deletes
+  `picked` rows unused for `--days` and rows past `expires_at`.
 
 ## 0.1.0a3 (2026-11-19)
 

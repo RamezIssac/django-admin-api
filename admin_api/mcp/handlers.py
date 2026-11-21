@@ -13,7 +13,7 @@ from django.db import router, transaction
 from django.http import QueryDict
 from django.utils.translation import gettext, gettext_noop
 
-from .. import custom_views, services
+from .. import custom_views, memory, services
 from ..changelist import PER_PAGE_PARAM, SHAPE_PARAM, describe_columns, get_columns
 from ..errors import InvalidArguments, NotFound, PermissionDeniedError
 from ..nested import ModelPath
@@ -527,6 +527,15 @@ def run_view(site, request, args) -> dict:
     )
 
 
+def set_preference(site, request, args):
+    key = _arg(args, "key", str)
+    request.mcp_memory = memory.set_preference(request.user, key, args.get("value"))
+    return {
+        "preferences": request.mcp_memory.as_dict(),
+        "note": gettext("Language applies from the next tool call; audience and notes from the next connection."),
+    }
+
+
 # --------------------------------------------------------------------------------------------
 # catalogue
 # --------------------------------------------------------------------------------------------
@@ -754,6 +763,25 @@ TOOLS = [
         handler=run_view,
         # stays on read-only sites, where write views are hidden and refused
         annotations={"readOnlyHint": False, "destructiveHint": True, "openWorldHint": False},
+    ),
+    ToolSpec(
+        name="set_preference",
+        title="Remember a preference",
+        description="Remember one of the user's own preferences across conversations, when the user asks for it. "
+        "'audience': 'business' (default: plain business wording) or 'developer' (model paths and field names "
+        "allowed). 'language': a language code (e.g. 'en', 'ar') that answers and record names come in. 'notes': "
+        "up to 500 characters the user wants you to know. Send an empty value to clear a preference.",
+        input_schema=obj(
+            {
+                "key": {"type": "string", "enum": list(memory.PREFERENCE_KEYS)},
+                "value": {"type": ["string", "null"], "description": "The new value; empty or null clears it."},
+            },
+            ["key"],
+        ),
+        output_schema=ANY_OBJECT,
+        handler=set_preference,
+        # the user's own preferences, not business data: listed on read-only sites too
+        annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
     ),
 ]
 

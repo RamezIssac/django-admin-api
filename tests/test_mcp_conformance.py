@@ -86,6 +86,7 @@ EXPECTED = {
         "resolve_entities",
         "run_action",
         "run_view",
+        "set_preference",
         "update_object",
     ],
     "models": ["testapp.client", "testapp.sales"],

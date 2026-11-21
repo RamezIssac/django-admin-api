@@ -61,6 +61,7 @@ def test_tools_catalogue(mcp):
         "delete_object",
         "run_action",
         "run_view",
+        "set_preference",
         "client_statement",  # @admin_api.view(mcp_tool=...)
         "post_sale",
     ]
@@ -72,6 +73,7 @@ def test_tools_catalogue(mcp):
         "resolve_entities",
         "get_object",
         "run_view",
+        "set_preference",  # the user's own preferences, not business data
         "client_statement",  # post_sale writes: hidden
     ]
 
