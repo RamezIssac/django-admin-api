@@ -208,8 +208,53 @@ writes. Each term returns two lists, `objects` and `models` ("clients" names a m
 - `AdminMcpSite(api_site, excluded_models=[...])` takes app labels or `app_label.model_name`; the
   default is `auth`, `sessions`, `contenttypes`, `admin` and `admin_api`. The list replaces the
   default.
-- The search runs through `AdminMcpSite.get_entity_backend()`; the default `LiveEntityBackend` needs
-  no index and works on any database.
+- The search runs through `AdminMcpSite.get_entity_backend()`. Without the search index below,
+  `LiveEntityBackend` runs each admin's own search; it needs no index and works on any database.
+
+### Search index (`admin_api.contrib.search`)
+
+An opt-in app that keeps one row per (object, search field) and per (model, label, language) in a
+search engine. `resolve_entities` then finds names across all models in one query, and catches typos
+on Postgres. Installing the app switches `resolve_entities` to the index.
+
+```python
+INSTALLED_APPS = [..., "admin_api", "admin_api.contrib.search"]
+```
+
+```bash
+python manage.py migrate                  # the table, and on Postgres pg_trgm with a GIN index
+python manage.py search_index ensure      # every deploy, after migrate
+```
+
+- Rows come from each MCP-exposed admin (minus `excluded_models`): its `search_fields` and
+  `api_search_fields` that are local text or number fields (relation paths, dates and booleans are
+  skipped), plus `verbose_name`, `verbose_name_plural` and `model_name` under every `LANGUAGES` code.
+  Text is folded on both sides: accents, case, Arabic letter variants and digits, the Arabic article.
+- Admin hooks: `get_search_index_fields()` replaces the derived field list, `search_index_code_fields`
+  adds fields whose exact match is `exact_code`, `search_aliases = {"en": ["bills"]}` adds model names.
+- Saves update rows on commit. `QuerySet.update()`, bulk writes, `loaddata` and deletes are not seen;
+  deleted rows never surface because every hit is checked against the admin's `get_queryset(request)`.
+  `search_index ensure` refreshes the label rows and rebuilds the models whose index fields, languages
+  or engine changed; it exits non-zero on a Postgres database with a `C` or `POSIX` ctype.
+  `rebuild_search_index [--model app.Model] [--models-only] [--batch-size 1000]` rebuilds in batches.
+- The built-in `db` engine works on every database; on Postgres a trigram pass adds `fuzzy` matches
+  (confidence `0.6 x word_similarity`, threshold 0.4). Other engines plug in by settings:
+
+```python
+ADMIN_API_SEARCH = {
+    "DEFAULT_ENGINE": "db",
+    "ENGINES": {
+        "db": {"BACKEND": "admin_api.contrib.search.engines.db.DatabaseEngine",
+               "OPTIONS": {"TRIGRAM_THRESHOLD": 0.4}},
+        # "meilisearch": {"BACKEND": "...", "OPTIONS": {...}},
+    },
+}
+```
+
+An engine subclasses `admin_api.contrib.search.engines.base.SearchEngine`: `upsert`, `delete_rows`,
+`replace_model_rows`, `prune`, `search`, `fuzzy_confidence`, and the flags `fuzzy` and
+`scope_pushdown`. Engines without `scope_pushdown` get their hits filtered through the admin's
+`get_queryset(request)`.
 
 ### Safer writes
 

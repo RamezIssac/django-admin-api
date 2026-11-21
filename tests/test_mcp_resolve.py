@@ -7,6 +7,7 @@ from django.contrib.auth.admin import UserAdmin
 
 from admin_api import AdminApiSite
 from admin_api.mcp import AdminMcpSite
+from admin_api.mcp.resolve import LiveEntityBackend
 from admin_api.models import ApiToken
 from tests.testapp import admin as testadmin
 from tests.testapp.models import Client, Payment, PaymentLine, Sales, Tag
@@ -29,9 +30,13 @@ site.register(get_user_model(), UserAdmin)
 api_site = AdminApiSite(site, name="resolve_api")
 
 
+class LiveMcpSite(AdminMcpSite):
+    entity_backend_class = LiveEntityBackend  # the search backend: tests/test_search_resolve.py
+
+
 @pytest.fixture
 def mcp():
-    return AdminMcpSite(api_site)
+    return LiveMcpSite(api_site)
 
 
 @pytest.fixture
@@ -155,9 +160,9 @@ def test_excluded_models(resolve, data):
     # auth is excluded by default although its admin is exposed
     assert resolve({"text": "root", "kind": "objects"})["objects"]["status"] == "none"
     assert resolve("users")["models"]["status"] == "none"
-    open_site = AdminMcpSite(api_site, excluded_models=())
+    open_site = LiveMcpSite(api_site, excluded_models=())
     assert resolve({"text": "root", "kind": "objects"}, site=open_site)["objects"]["candidates"][0]["label"] == "root"
-    no_sales = AdminMcpSite(api_site, excluded_models=("auth", "testapp.sales"))
+    no_sales = LiveMcpSite(api_site, excluded_models=("auth", "testapp.sales"))
     assert resolve("alpha", site=no_sales)["objects"]["searched_models"] == ["testapp.client"]
 
 
@@ -264,7 +269,7 @@ def test_to_many_search_field_returns_each_object_once(resolve, data):
     by_sales = admin.AdminSite(name="resolve_by_sales")
     by_sales.register(Client, ClientBySales)
     Sales.objects.create(slug="S-10", client=data["clients"]["Ahmed Ali"])
-    out = resolve("S-1", site=AdminMcpSite(AdminApiSite(by_sales, name="resolve_by_sales_api")))
+    out = resolve("S-1", site=LiveMcpSite(AdminApiSite(by_sales, name="resolve_by_sales_api")))
     assert [(c["label"], c["match"], c["matched_field"]) for c in out["objects"]["candidates"]] == [
         ("Ahmed Ali", "exact_code", "sales__slug")
     ]

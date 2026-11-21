@@ -4,6 +4,7 @@ import contextlib
 import logging
 from weakref import WeakSet
 
+from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.utils import translation
@@ -83,7 +84,8 @@ class AdminMcpSite:
     instructions = DEFAULT_INSTRUCTIONS
     # app labels or "app_label.model_name" that resolve_entities never searches
     excluded_models = ("auth", "sessions", "contenttypes", "admin", "admin_api")
-    entity_backend_class = LiveEntityBackend
+    # None: SearchEntityBackend when admin_api.contrib.search is installed, else LiveEntityBackend
+    entity_backend_class = None
     # Bearer tokens only: MCP clients are not browsers, and a session cookie must not be enough.
     authenticators = [TokenAuthenticator]
 
@@ -134,8 +136,15 @@ class AdminMcpSite:
         return self.require_dry_run if override is None else bool(override)
 
     def get_entity_backend(self):
-        """The backend ``resolve_entities`` finds candidates with (default: each admin's own search)."""
-        return self.entity_backend_class(self)
+        """The backend ``resolve_entities`` finds candidates with: ``entity_backend_class``, else the
+        search index when ``admin_api.contrib.search`` is installed, else each admin's own search."""
+        backend_class = self.entity_backend_class
+        if backend_class is None:
+            if apps.is_installed("admin_api.contrib.search"):
+                from ..contrib.search.backend import SearchEntityBackend as backend_class
+            else:
+                backend_class = LiveEntityBackend
+        return backend_class(self)
 
     def get_user_memory(self, request):
         """The user's :class:`admin_api.memory.UserMemory`, loaded once and cached on ``request.mcp_memory``."""

@@ -214,8 +214,9 @@ class LiveEntityBackend:
     def __init__(self, site):
         self.site = site
 
-    def search_objects(self, request, term: str, targets: list[Target]) -> tuple[list[Hit], bool]:
-        """All scored hits, best first, and whether a model had more rows than were scanned."""
+    def search_objects(self, request, term: str, targets: list[Target], limit=None) -> tuple[list[Hit], bool]:
+        """All scored hits, best first, and whether a model had more rows than were scanned. A
+        backend may return only the best ``limit + 1``; this one ignores ``limit``."""
         hits, capped = [], False
         for target in targets:
             found, more = self._search_target(request, term, target)
@@ -255,7 +256,7 @@ class LiveEntityBackend:
                         hit.match, hit.confidence, hit.matched_field = match, CONFIDENCE[match], path
         return sorted(best.values(), key=lambda h: -h.confidence), capped
 
-    def search_models(self, request, term: str, targets: list[Target]) -> list[Hit]:
+    def search_models(self, request, term: str, targets: list[Target], limit=None) -> list[Hit]:
         """Models whose verbose name, plural or model name matches, in each language."""
         wanted, hits = normalize(term), []
         for target in targets:
@@ -320,7 +321,7 @@ def _object_candidates(hits: list[Hit]) -> list[dict]:
 
 
 def _resolve_objects(site, request, term: str, targets: list[Target], limit: int) -> dict:
-    hits, capped = site.get_entity_backend().search_objects(request, term, targets)
+    hits, capped = site.get_entity_backend().search_objects(request, term, targets, limit=limit)
     status = list_status((h.confidence, h.match) for h in hits)
     return {
         "status": status,
@@ -331,7 +332,7 @@ def _resolve_objects(site, request, term: str, targets: list[Target], limit: int
 
 
 def _resolve_models(site, request, term: str, targets: list[Target], limit: int) -> dict:
-    hits = site.get_entity_backend().search_models(request, term, targets)
+    hits = site.get_entity_backend().search_models(request, term, targets, limit=limit)
     return {
         "status": list_status((h.confidence, h.match) for h in hits),
         "more": len(hits) > limit,
