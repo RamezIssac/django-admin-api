@@ -672,6 +672,9 @@ urlpatterns += [path("mcp/", mcp_site.urls)]
   and excluded models all answer `"This kind of record is not available here."`. A
   `PermissionDeniedError` without a detail gets a default one; the services pass one per
   operation (`"You may not change this sales."`). Library messages are wrapped in `gettext`.
+- `list_objects` with a `search` that finds nothing adds `searched_fields`, `id_filters` (the
+  `list_filter` relation parameters, `<path>__<target field>__exact`, as Django's
+  `RelatedFieldListFilter` names them) and a `hint`.
 - `model` is `"app_label.model_name"`. `ordering` takes column names (`"-date"`), translated to
   the admin's `o=` indexes; `filters` are the admin's own changelist parameters, as listed by
   `describe_model` (`filters[].choices[].params`).
