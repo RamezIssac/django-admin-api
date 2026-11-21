@@ -84,10 +84,21 @@ def request_allows(request, opts, op: str) -> bool:
 
 
 def check(request, opts, op: str):
+    from django.utils.translation import gettext
+
     from .errors import PermissionDeniedError
 
     if not request_allows(request, opts, op):
-        raise PermissionDeniedError(f"Token scopes do not allow '{op}' on {opts.app_label}.{opts.model_name}.")
+        verbs = {
+            "view": gettext("view"),
+            "add": gettext("add"),
+            "change": gettext("change"),
+            "delete": gettext("delete"),
+        }
+        raise PermissionDeniedError(
+            gettext("This connection may not %(op)s %(models)s.")
+            % {"op": verbs.get(op, op), "models": opts.verbose_name_plural}
+        )
 
 
 class ScopedInlineMixin:

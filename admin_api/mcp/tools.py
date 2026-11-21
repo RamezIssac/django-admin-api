@@ -54,10 +54,11 @@ MODEL_ARG = {
 PARENTS_ARG = {
     "type": "array",
     "items": {"type": ["integer", "string"]},
-    "description": "Nested models only: the pk of each parent object, outermost first, one per 'nested_under' "
-    "entry (e.g. model 'store.client/sales/salesitem' with parents [client_pk, sales_pk]).",
+    "description": "Nested models only: the ID of each parent record, outermost first, one per 'nested_under' "
+    "entry (e.g. model 'store.client/sales/salesitem' with parents [client_id, sales_id]).",
 }
-PK_ARG = {"type": ["integer", "string"], "description": "Primary key of the object."}
+ID_ARG = {"type": ["integer", "string"], "description": "ID of the record."}
+PK_ALIAS_ARG = {"type": ["integer", "string"], "description": "Deprecated alias of 'id'."}
 DATA_ARG = {
     "type": "object",
     "description": "Field values, matching describe_model's input_schema. Inline rows go under 'inlines'.",
@@ -71,7 +72,7 @@ DRY_RUN_ARG = {
 CONFIRM_TOKEN_ARG = {
     "type": "string",
     "description": "Only when the server requires a dry run first: the confirm_token returned by a valid "
-    "dry_run of this exact write (same model, pk and data).",
+    "dry_run of this exact write (same model, ID and data).",
 }
 FILTERS_ARG = {
     "type": "object",

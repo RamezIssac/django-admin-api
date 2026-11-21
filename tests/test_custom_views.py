@@ -410,17 +410,17 @@ def test_run_view_read_only_site(call, data):
 
 def test_promoted_tool(mcp, call, data):
     tool = mcp.get_tool("client_statement")
-    assert tool.input_schema["required"] == ["pk"]
-    assert set(tool.input_schema["properties"]) == {"pk", "date_from", "date_to", "status"}
+    assert "required" not in tool.input_schema
+    assert set(tool.input_schema["properties"]) == {"id", "pk", "date_from", "date_to", "status"}
     assert tool.annotations["readOnlyHint"] is True
     assert "Sales of one client" in tool.description
-    out, err = call("client_statement", {"pk": data["ahmed"].pk, "date_to": "2025-01-31"})
+    out, err = call("client_statement", {"id": data["ahmed"].pk, "date_to": "2025-01-31"})
     assert not err and out["result"]["total"] == "10.00"
     out, err = call("client_statement", {"pk": data["ahmed"].pk, "nope": 1})
     assert err and out["fields"] == {"nope": ["Unknown parameter."]}
 
     post = mcp.get_tool("post_sale")
-    assert set(post.input_schema["properties"]) == {"pk", "note", "dry_run", "confirm_token"} and post.writes
+    assert set(post.input_schema["properties"]) == {"id", "pk", "note", "dry_run", "confirm_token"} and post.writes
     sale = data["sales"][0]
     out, err = call("post_sale", {"pk": sale.pk, "dry_run": True})
     assert not err and out["dry_run"] is True
