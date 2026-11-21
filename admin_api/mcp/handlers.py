@@ -631,6 +631,11 @@ TOOLS = [
                         ["text"],
                     ),
                 },
+                "models": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Default 'models' for every term without its own 'models' or 'for_field'.",
+                },
                 "limit": {"type": "integer", "minimum": 1, "maximum": MAX_LIMIT, "default": 5},
             },
             ["terms"],

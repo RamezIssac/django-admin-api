@@ -787,7 +787,9 @@ the lowest Python it supports within our range (3.10 / 3.12 / 3.13), plus a `lin
 Users type names ("john", "invoices"), tools take ids. `resolve_entities` closes that gap
 across every model the user can see, in one read-only call.
 
-- **Contract.** `terms[]` of `{text, kind?, models?, for_field?}`, `limit` (default 5, cap 20).
+- **Contract.** `terms[]` of `{text, kind?, models?, for_field?}`, `limit` (default 5, cap 20), and a
+  top-level `models`: the default for every term without its own `models` or `for_field` and with
+  `kind` other than `models`.
   Per term: `objects` and `models`, each `{status, more, candidates}`; `objects` also lists
   `searched_models`. `kind` (`any`, `objects`, `models`) picks the lists; `models` and
   `for_field` imply `objects`. Object candidates: `model`, `id`, `label` (`str(obj)` read from
