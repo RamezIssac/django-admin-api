@@ -46,8 +46,9 @@ write is refused unless you pass the confirm_token returned by a valid dry run o
 A confirm_token works once and only while the object is unchanged: dry-run again before each write.
 4. delete_object only deletes with confirm=true; without it you get a preview.
 5. Some models have custom views (reports, statements, computed pages, business operations), listed under 'views' by list_models and described (parameters) by describe_model. Run them with run_view; some are also published as their own tools.
-6. Before you filter, report or write with a name the user typed, call resolve_entities and use the ids it \
-returns. A word naming a kind of record ('invoices', 'clients') resolves under 'models'; use that model with \
+6. Before you filter, report or write with a name the user typed, call resolve_entities and use the IDs it \
+returns. Note: pass those IDs as describe_model's filter for that kind of record (for example 'client'), not \
+as 'search' text, because search does not look into related records. A word naming a kind of record ('invoices', 'clients') resolves under 'models'; use that model with \
 list_objects or its views. Each list has a status. \
 'unique': for a read, use it and name its label in your answer; for a write, use it only when its match is \
 'exact' or 'exact_code', otherwise ask. 'ambiguous': ask the user to pick, listing each candidate's label and \

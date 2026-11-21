@@ -20,7 +20,12 @@
 - **MCP answers in business wording.** The default instructions open with "This server gives you
   the user's business records and documents" and gain a paragraph asking the agent to name kinds
   of records by `name` / `name_plural`, records by their label, and to say "ID" only when needed.
-  Line 6 now asks to list each ambiguous candidate's label and the kind of record.
+  Line 6 now asks to list each ambiguous candidate's label and the kind of record, and to pass
+  resolved IDs as describe_model's filter for that kind of record (e.g. `client`), not as `search`
+  text.
+- MCP `list_objects` with a `search` that finds nothing adds `searched_fields` (the admin's search
+  fields), `id_filters` (the `list_filter` parameters that take a related record's ID, e.g.
+  `client__id__exact`) and a `hint`.
 - **MCP keys are `id` and `label`** (REST unchanged): object heads, inline rows, related records
   (`{"id", "label"}`), `list_objects` `columns[0]`, write results, delete previews, view results;
   `describe_model` `pk_field` is now `id_field`. `list_models` items start with `name`. The tool

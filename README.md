@@ -152,7 +152,9 @@ their verbose `name`, records by their `label`, "ID" only when needed. The tools
 way: records carry `id` and `label` (REST keeps `pk` and `str`), related records are
 `{"id", "label"}`, and messages use verbose names (`"No sales with ID 9."`, `"You may not change
 this sales."`, `"This kind of record is not available here."`). The arguments `pk` and `pks` are
-still accepted as aliases of `id` and `ids` for one release.
+still accepted as aliases of `id` and `ids` for one release. A `list_objects` search that finds
+nothing returns `searched_fields`, `id_filters` (e.g. `client__id__exact`) and a `hint` to filter
+by a resolved ID.
 
 Two hooks on `AdminMcpSite` adapt this per request:
 
