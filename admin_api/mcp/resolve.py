@@ -347,7 +347,7 @@ def _resolve_models(site, request, term: str, targets: list[Target], limit: int)
     }
 
 
-def _resolve_term(site, request, targets: dict[str, Target], term: dict, limit: int) -> dict:
+def _resolve_term(site, request, targets: dict[str, Target], term: dict, limit: int, default_models=None) -> dict:
     if not isinstance(term, dict):
         raise InvalidArguments("Each entry of 'terms' must be an object with 'text'.")
     text = term.get("text")
@@ -358,6 +358,8 @@ def _resolve_term(site, request, targets: dict[str, Target], term: dict, limit: 
     kind = term.get("kind", "any")
     if kind not in KINDS:
         raise InvalidArguments(f"'kind' must be one of {', '.join(KINDS)}.")
+    if models_arg is None and for_field is None and kind != "models":
+        models_arg = default_models
     if models_arg is not None and (not isinstance(models_arg, list) or not all(isinstance(m, str) for m in models_arg)):
         raise InvalidArguments("'models' must be a list of model labels.")
     narrowed = models_arg is not None or for_field is not None
@@ -392,4 +394,9 @@ def resolve_entities(site, request, args) -> dict:
         raise InvalidArguments("'limit' must be an integer.")
     limit = max(1, min(limit, MAX_LIMIT))
     targets = allowed_targets(site, request)
-    return {"results": [_resolve_term(site, request, targets, term, limit) for term in terms]}
+    default_models = args.get("models")
+    if default_models is not None and (
+        not isinstance(default_models, list) or not all(isinstance(m, str) for m in default_models)
+    ):
+        raise InvalidArguments("'models' must be a list of model labels.")
+    return {"results": [_resolve_term(site, request, targets, term, limit, default_models) for term in terms]}
