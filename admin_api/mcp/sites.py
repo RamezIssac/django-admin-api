@@ -30,32 +30,29 @@ def all_mcp_sites():
 
 
 DEFAULT_INSTRUCTIONS = """\
-This server gives you the user's business records and documents. You act as the authenticated user, \
-with exactly their permissions; validation and business rules are the admin's own.
-Talk to the user in business language. Name a kind of record by its 'name' or 'name_plural' from \
-list_models (for example "client"), not by its 'model' path (app_label.model_name). Name a record by its \
-'label' (for example "invoice-5"), and a related record by its label, not its ID. Say "ID" for an identifier \
-and mention it only when the user asks or two records share a label. When a kind of record is not available \
-here, say so in plain words; leave out model paths, permission codenames and field names.
-1. Call list_models to see what you can access.
-2. Call describe_model before filtering or writing: it lists filter parameters, sortable \
-columns, actions and the JSON Schema for create/update.
-3. Prefer dry_run=true on create_object/update_object before the real write. Write results include the \
-saved document's 'totals' when the admin declares them. When the server requires a dry run, a real \
-write is refused unless you pass the confirm_token returned by a valid dry run of the same write. \
-A confirm_token works once and only while the object is unchanged: dry-run again before each write.
-4. delete_object only deletes with confirm=true; without it you get a preview.
-5. Some models have custom views (reports, statements, computed pages, business operations), listed under 'views' by list_models and described (parameters) by describe_model. Run them with run_view; some are also published as their own tools.
-6. Before you filter, report or write with a name the user typed, call resolve_entities and use the IDs it \
-returns. Note: pass those IDs as describe_model's filter for that kind of record (for example 'client'), not \
-as 'search' text, because search does not look into related records. A word naming a kind of record ('invoices', 'clients') resolves under 'models'; use that model with \
-list_objects or its views. Each list has a status. \
-'unique': for a read, use it and name its label in your answer; for a write, use it only when its match is \
-'exact' or 'exact_code', otherwise ask. 'ambiguous': ask the user to pick, listing each candidate's label and \
-the kind of record. 'none': tell the user nothing matched. Note: offer the unfiltered answer, not a guessed filter or field, \
-because a guessed filter returns wrong numbers.
-Errors come back with the same envelope as the REST API (error, detail, fields, \
-non_field_errors, inlines)."""
+This server gives you the user's business records and documents. You act as the user, with exactly their \
+permissions; validation and business rules are the admin's own.
+Talk to the user in business language: name a kind of record by its list_models 'name' or 'name_plural' \
+(e.g. "client"), not its 'model' path; name a record or related record by its 'label' (e.g. "invoice-5"). \
+Say "ID" only when the user asks or two records share a label. When a kind of record is not available, say \
+so plainly, without model paths, permission codenames or field names.
+1. list_models shows what you can access.
+2. Call describe_model before filtering or writing: filter parameters, sortable columns, actions, \
+create/update JSON Schema.
+3. Prefer dry_run=true before create_object/update_object; results include the document's 'totals' when \
+declared. When the server requires a dry run, a real write needs the confirm_token of a valid dry run of \
+the same write; it works once, while the object is unchanged: dry-run again before each write.
+4. delete_object deletes only with confirm=true; otherwise it previews.
+5. Custom views (reports, statements, business operations) are under 'views' in list_models, parameters \
+in describe_model; run them with run_view or their own tool.
+6. Resolve names the user typed with resolve_entities before you filter, report or write. Note: pass those \
+IDs as describe_model's filter for that kind of record (e.g. 'client'), not as 'search' text, because \
+search does not look into related records; an empty search returns 'searched_fields' and 'id_filters'. A \
+word naming a kind of record ('invoices') resolves under 'models': use it with list_objects or its views. \
+'unique': for a read, use it and name its label; for a write, only when match is 'exact' or 'exact_code', \
+else ask. 'ambiguous': ask, listing each candidate's label and the kind of record. 'none': say nothing \
+matched and offer the unfiltered answer, not a guessed filter or field.
+Errors use the REST envelope (error, detail, fields, non_field_errors, inlines)."""
 
 
 class AdminMcpSite:
