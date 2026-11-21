@@ -790,7 +790,7 @@ across every model the user can see, in one read-only call.
 
 - **Contract.** `terms[]` of `{text, kind?, models?, for_field?}`, `limit` (default 5, cap 20).
   Per term: `objects` and `models`, each `{status, more, candidates}`; `objects` also lists
-  `searched_models`. `kind` (`any`, `objects`, `models`) picks the lists; `models` and
+  `searched_models` when its status is `none` or the call passes `verbose=true`. `kind` (`any`, `objects`, `models`) picks the lists; `models` and
   `for_field` imply `objects`. Object candidates: `model`, `id`, `label` (`str(obj)` read from
   the scoped queryset), `confidence`, `match`, `matched_field`. Model candidates: `model`,
   `label`, `language`, `confidence`, `match`. No other field values leave the server.

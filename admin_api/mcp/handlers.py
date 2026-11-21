@@ -656,6 +656,11 @@ TOOLS = [
                     ),
                 },
                 "limit": {"type": "integer", "minimum": 1, "maximum": MAX_LIMIT, "default": 5},
+                "verbose": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Also list the models searched when objects were found ('none' always lists them).",
+                },
             },
             ["terms"],
         ),
