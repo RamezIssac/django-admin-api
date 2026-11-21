@@ -661,6 +661,7 @@ urlpatterns += [path("mcp/", mcp_site.urls)]
 | `run_action` | `model`, `action`, `ids[]` or `all` + `filters{}` | `services.run_action` (no dry run) |
 | `run_view` | `model`, `view`, `id?`, `params{}`, `dry_run` | `services.run_view` (§16) |
 | *view tools* | `id?`, the view's params, `dry_run?` | views with `mcp_tool=` (§16) |
+| `set_preference` | `key`, `value` | the caller's own `McpUserMemory` preference row (§14.10) |
 
 - MCP speaks `id` and `label` where REST speaks `pk` and `str` (0.1.0a4): object heads, inline
   rows, every related record (`{"id", "label"}`), `list_objects` `columns[0]`, `describe_model`
@@ -691,10 +692,11 @@ urlpatterns += [path("mcp/", mcp_site.urls)]
   discarded. **Non-DB side effects in hooks still happen**: put them in `on_commit`, or skip
   them when `request.is_dry_run`.
 - `ApiRequestMiddleware` sets `is_api`, `is_mcp` and `is_dry_run` to `False` on every request.
-- `AdminMcpSite.get_instructions(request)` (default: `instructions`) is sent at `initialize`; the
-  HTTP view builds one SDK `Server` per request, stdio asks once at start.
-  `AdminMcpSite.get_language(request)` (default `None`: keep the active language, e.g. from
-  `LocaleMiddleware`) wraps `call_tool` and `get_tools` in `translation.override`.
+- `AdminMcpSite.get_instructions(request)` is sent at `initialize`; the HTTP view builds one SDK
+  `Server` per request, stdio asks once at start. Default: `instructions` adjusted to the user's
+  memory (§14.10). `AdminMcpSite.get_language(request)` (default: the user's `language`
+  preference, else `None` to keep the active language, e.g. from `LocaleMiddleware`) wraps
+  `call_tool` and `get_tools` in `translation.override`.
 
 ### 14.4 JSON Schema
 
@@ -824,6 +826,31 @@ across every model the user can see, in one read-only call.
   (ignores the admin's `get_queryset`); a single merged list (a model name decides an object's
   status).
 - Tests: `tests/test_mcp_resolve.py`.
+
+### 14.10 Per-user memory (0.1.0a4)
+
+- **Store.** `admin_api.McpUserMemory`: `user` (FK, CASCADE), `kind` (`preference` | `picked`),
+  `key`, `value` (JSON), `updated`, `expires_at`; unique on `(user, kind, key)`. `admin_api` is
+  in the default `excluded_models` and `McpUserMemoryAdmin` has `api_enabled = False`, so no
+  generic tool lists or reads it.
+- **Preferences** (`admin_api.memory`): `audience` (`business` default, `developer`), `language`
+  (a `settings.LANGUAGES` code, through `get_supported_language_variant`), `notes` (500
+  characters). A stored value that no longer validates falls back to the default.
+- **Loading.** `AdminMcpSite.get_user_memory(request)` runs one query and caches a `UserMemory`
+  on `request.mcp_memory`; `prepare_request`, `get_instructions` and `get_language` all go
+  through it. Anonymous users get the defaults without a query.
+- **Instructions.** `developer` replaces `BUSINESS_WORDING` with `DEVELOPER_WORDING` when the
+  site's instructions contain it; `language` appends "Answer the user in <language name>.";
+  `notes` are appended as the user's own notes. No rows: exactly `instructions`.
+- **`set_preference(key, value)`** writes only `request.user`'s preference rows; an empty value
+  deletes the row. It is not a write tool (listed on read-only sites). The audit log records
+  the tool name only, never the value.
+- **Retention.** `manage.py prune_mcp_memory` deletes `picked` rows not updated for `--days`
+  (180) and every row past `expires_at`, in `--batch-size` batches. `picked` rows are written by
+  the remembered-picks work in `resolve_entities`, which builds on this store.
+- **Admin.** `McpUserMemoryAdmin` is registered next to the token admin; users see and edit
+  their own rows, superusers everyone's; preference values are validated in the form.
+- Tests: `tests/test_mcp_memory.py`.
 
 ## 15. Nested admins (milestone 17, as built)
 

@@ -11,6 +11,7 @@ from django.utils.translation import gettext
 
 from ..auth import TokenAuthenticator
 from ..errors import ApiError, NotAuthenticated, PermissionDeniedError
+from ..memory import DEVELOPER, load_user_memory
 from ..mixins import ApiAdminMixin
 from .resolve import LiveEntityBackend
 from .tools import ToolResult, ToolSpec
@@ -29,14 +30,23 @@ def all_mcp_sites():
     return list(_all_sites)
 
 
-DEFAULT_INSTRUCTIONS = """\
-This server gives you the user's business records and documents. You act as the authenticated user, \
-with exactly their permissions; validation and business rules are the admin's own.
+BUSINESS_WORDING = """\
 Talk to the user in business language. Name a kind of record by its 'name' or 'name_plural' from \
 list_models (for example "client"), not by its 'model' path (app_label.model_name). Name a record by its \
 'label' (for example "invoice-5"), and a related record by its label, not its ID. Say "ID" for an identifier \
 and mention it only when the user asks or two records share a label. When a kind of record is not available \
 here, say so in plain words; leave out model paths, permission codenames and field names.
+"""
+DEVELOPER_WORDING = """\
+The user is a developer: you may name model paths (app_label.model_name), field names and IDs.
+"""
+DEFAULT_INSTRUCTIONS = (
+    """\
+This server gives you the user's business records and documents. You act as the authenticated user, \
+with exactly their permissions; validation and business rules are the admin's own.
+"""
+    + BUSINESS_WORDING
+    + """\
 1. Call list_models to see what you can access.
 2. Call describe_model before filtering or writing: it lists filter parameters, sortable \
 columns, actions and the JSON Schema for create/update.
@@ -55,6 +65,7 @@ the kind of record. 'none': tell the user nothing matched. Note: offer the unfil
 because a guessed filter returns wrong numbers.
 Errors come back with the same envelope as the REST API (error, detail, fields, \
 non_field_errors, inlines)."""
+)
 
 
 class AdminMcpSite:
@@ -126,13 +137,32 @@ class AdminMcpSite:
         """The backend ``resolve_entities`` finds candidates with (default: each admin's own search)."""
         return self.entity_backend_class(self)
 
+    def get_user_memory(self, request):
+        """The user's :class:`admin_api.memory.UserMemory`, loaded once and cached on ``request.mcp_memory``."""
+        memory = getattr(request, "mcp_memory", None)
+        if memory is None:
+            memory = request.mcp_memory = load_user_memory(getattr(request, "user", None))
+        return memory
+
     def get_instructions(self, request) -> str:
-        """The server instructions sent to ``request``'s client at ``initialize`` (default: ``instructions``)."""
-        return self.instructions
+        """The server instructions sent to ``request``'s client at ``initialize``: ``instructions``
+        adjusted to the user's audience, language and notes (see :meth:`get_user_memory`)."""
+        memory = self.get_user_memory(request)
+        text = self.instructions
+        if memory.audience == DEVELOPER and BUSINESS_WORDING in text:
+            text = text.replace(BUSINESS_WORDING, DEVELOPER_WORDING)
+        lines = [text]
+        if memory.language:
+            name = translation.get_language_info(memory.language)["name"]
+            lines.append(f"Answer the user in {name}.")
+        if memory.notes:
+            lines.append(f"The user's own notes for you: {memory.notes}")
+        return "\n".join(lines)
 
     def get_language(self, request) -> str | None:
-        """The language tool calls and tool lists run in; ``None`` keeps the active one (``LocaleMiddleware``)."""
-        return None
+        """The language tool calls and tool lists run in: the user's ``language`` preference, else
+        ``None`` (keep the active one, e.g. from ``LocaleMiddleware``)."""
+        return self.get_user_memory(request).language
 
     def translation_override(self, request):
         language = self.get_language(request) if request is not None else None
@@ -194,12 +224,13 @@ class AdminMcpSite:
         raise NotAuthenticated("Send 'Authorization: Bearer <api token>'.")
 
     # --- calling tools -------------------------------------------------------------------------
-    @staticmethod
-    def prepare_request(request):
-        """Mark ``request`` as an MCP request (also an API request, so api_ twins apply)."""
+    def prepare_request(self, request):
+        """Mark ``request`` as an MCP request (also an API request, so api_ twins apply) and load
+        the user's memory into ``request.mcp_memory``."""
         request.is_api = True
         request.is_mcp = True
         request.is_dry_run = False
+        self.get_user_memory(request)
         return request
 
     def call_tool(self, request, name: str, arguments: dict | None) -> ToolResult:

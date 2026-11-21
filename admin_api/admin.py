@@ -1,4 +1,4 @@
-"""Admin for API tokens. Registered on the wrapped site by ``AdminApiSite`` (not autodiscovered)."""
+"""Admins for API tokens and MCP user memory. Registered on the wrapped site by ``AdminApiSite`` (not autodiscovered)."""
 
 from __future__ import annotations
 
@@ -106,3 +106,41 @@ class ApiTokenAdmin(admin.ModelAdmin):
             token.revoke()
             count += 1
         self.message_user(request, _("%(count)d token(s) revoked.") % {"count": count})
+
+
+class McpUserMemoryForm(forms.ModelForm):
+    def clean(self):
+        from .errors import InvalidArguments
+        from .memory import clean_preference
+
+        cleaned = super().clean()
+        if cleaned.get("kind") == "preference" and cleaned.get("key"):
+            try:
+                cleaned["value"] = clean_preference(cleaned["key"], cleaned.get("value"))
+            except InvalidArguments as exc:
+                raise forms.ValidationError(exc.detail) from None
+        return cleaned
+
+
+class McpUserMemoryAdmin(admin.ModelAdmin):
+    """Each user sees and edits their own memory rows; superusers see everyone's."""
+
+    api_enabled = False  # never expose memory through the API itself
+
+    list_display = ["key", "kind", "user", "value", "updated", "expires_at"]
+    list_filter = ["kind", "key"]
+    search_fields = ["key", "user__username"]
+    form = McpUserMemoryForm
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request).select_related("user")
+        return qs if request.user.is_superuser else qs.filter(user=request.user)
+
+    def get_fields(self, request, obj=None):
+        fields = ["kind", "key", "value", "expires_at"]
+        return ["user", *fields] if request.user.is_superuser else fields
+
+    def save_model(self, request, obj, form, change):
+        if not request.user.is_superuser or not obj.user_id:
+            obj.user = request.user
+        super().save_model(request, obj, form, change)
