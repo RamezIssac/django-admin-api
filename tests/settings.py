@@ -10,6 +10,7 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "admin_api",
+    "admin_api.contrib.search",
     "tests.testapp",
 ]
 MIDDLEWARE = [
