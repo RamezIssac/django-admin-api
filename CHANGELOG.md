@@ -132,6 +132,14 @@
   is the authorization server (DCR, CIMD, PKCE, RFC 9728 and RFC 8414 discovery). A project-side
   `OAuthAuthenticator` in `AdminMcpSite.authenticators` maps the access token to its user and its
   scopes to library scopes. A 401 points clients at the resource metadata.
+- **`resolve_entities` reads model labels in any case** (`store.Client` is `store.client`, as in
+  `list_objects`), in `models` and `for_field`. An unknown or hidden label is an `invalid_arguments`
+  error naming it (was `status: none` with `searched_models: []`). A `for_field` that is not a
+  relation field adds `help`: pass `models` to find a record by name.
+- Instruction line 6, `none`: say nothing matched and ask whether to run it for everyone; run
+  nothing more (was: offer the unfiltered answer).
+- `AdminMcpSite.excluded_tools` (and `excluded_tools=`): tool names left out of `tools/list`. With
+  `read_only=True, excluded_tools=["get_history"]` a question-answering client gets 6 generic tools.
 
 ## 0.1.0a3 (2026-11-19)
 
