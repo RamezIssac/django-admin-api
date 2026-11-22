@@ -280,12 +280,12 @@ def test_portable_upsert_matches_the_native_one(indexed, monkeypatch):
         party = Party.objects.create(pk=client.pk, name="Acme", code="AC-1")
         other = Party.objects.create(name="Other")
     pk, other_pk = str(party.pk), str(other.pk)
-    assert rows(Party) == [(pk, "code", "ac-1"), (pk, "name", "acme"), (other_pk, "name", "other")]
+    assert rows(Party) == sorted([(pk, "code", "ac-1"), (pk, "name", "acme"), (other_pk, "name", "other")])
     name = SearchEntry.objects.get(object_pk=pk, field="name", content_type__model="party")
     with indexed():
         party.name, party.code = "Acme Co", "AC-2"
         party.save()
-    assert rows(Party) == [(pk, "code", "ac-2"), (pk, "name", "acme co"), (other_pk, "name", "other")]
+    assert rows(Party) == sorted([(pk, "code", "ac-2"), (pk, "name", "acme co"), (other_pk, "name", "other")])
     assert rows(Client) == [(str(client.pk), "name", "acme")]
     renamed = SearchEntry.objects.get(object_pk=pk, field="name", content_type__model="party")
     assert renamed.updated_at > name.updated_at and renamed.indexed_at > name.indexed_at
