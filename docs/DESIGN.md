@@ -909,8 +909,8 @@ An opt-in app (`INSTALLED_APPS`, label `admin_api_search`) that stores searchabl
   ordinary model permissions.
 - **Instructions.** `get_instructions` runs one query for an authenticated user (none for
   anonymous) and appends `USER_INSTRUCTIONS_HEADING` and the text after `instructions`. A total
-  over `instructions_max_length` (4,096) is cut to that length, ending in `TRIMMED_NOTE`. No row:
-  exactly `instructions`.
+  over `instructions_max_length` (4,096), with or without a user row, is cut to that length,
+  ending in `TRIMMED_NOTE`.
 - The business wording is the site default; a developer user gets "model paths and field names
   are fine" in their own instructions.
 - Tests: `tests/test_mcp_instructions.py`.
