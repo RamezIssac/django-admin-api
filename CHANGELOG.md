@@ -2,6 +2,15 @@
 
 ## 0.1.0a3 (unreleased)
 
+- **MCP dry runs capture e-mail.** A dry run rolled back the database but still delivered mail
+  sent from `save()`, a signal or a write view. Now every e-mail backend opened during a dry run
+  collects its messages, and the result lists them as `suppressed_emails` (`recipients`,
+  `subject`). Other non-database side effects still happen: run them from
+  `transaction.on_commit`, which a dry run discards.
+- **`get_mcp_confirm_state(request, obj)`** on the admin (default on `ApiAdminMixin`: `None`)
+  adds state stored outside the object's row, such as the last row of a status log, to the
+  `require_dry_run` confirm-token fingerprint. A concurrent change to that state now gets 409
+  `invalid_confirm_token`.
 - **The MCP `confirm_token` is single-use and bound to the object's state.** It was a stateless
   signature, valid 15 minutes for any number of writes: one dry run allowed repeated writes, from
   any API token of the same user, after the object changed. Now the dry run stores a random `jti`

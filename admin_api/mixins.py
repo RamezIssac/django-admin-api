@@ -45,6 +45,10 @@ class ApiAdminMixin:
             description = description(request)
         return str(description) if description else None
 
+    def get_mcp_confirm_state(self, request, obj):
+        """Extra state a ``require_dry_run`` confirm token is bound to, beyond ``obj``'s own row
+        (``None`` for a create). Return plain values, such as the pk of the last related log row."""
+
     # --- changelist-level ------------------------------------------------------------------
     def get_list_display(self, request):
         if _is_api(request) and not is_resolving(request, "list_display"):

@@ -1,9 +1,10 @@
 """Confirm tokens for ``require_dry_run``: single-use, issued by a dry run for exactly one write.
 
 The token is a timestamp-signed random ``jti`` stored in :class:`admin_api.models.McpConfirmation`
-with a SHA-256 fingerprint of the user, the API token, the operation, its exact arguments and the
-stored state of the object it writes. The real write recomputes the fingerprint and spends the
-row in one conditional UPDATE: a token works once, for that write, while the object is unchanged.
+with a SHA-256 fingerprint of the user, the API token, the operation, its exact arguments, the
+stored state of the object it writes and the admin's ``get_mcp_confirm_state(request, obj)``.
+The real write recomputes the fingerprint and spends the row in one conditional UPDATE: a token
+works once, for that write, while the object and that state are unchanged.
 """
 
 from __future__ import annotations
@@ -38,6 +39,13 @@ def object_state(obj, *, lock: bool = False) -> dict | None:
     model = type(obj)
     rows = model._base_manager.using(router.db_for_write(model)).filter(pk=obj.pk)
     return (rows.select_for_update() if lock else rows).values().first()
+
+
+def write_state(model_admin, request, obj, *, lock: bool = False) -> dict:
+    """What a confirm token pins: the object's stored row and the admin's extra state, such as
+    the last row of a log the write appends to (``get_mcp_confirm_state``)."""
+    hook = getattr(model_admin, "get_mcp_confirm_state", None)
+    return {"row": object_state(obj, lock=lock), "extra": hook(request, obj) if hook else None}
 
 
 def fingerprint(request, operation: str, scope: dict, state) -> str:

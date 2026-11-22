@@ -7,6 +7,7 @@ a Django request context and raise :class:`admin_api.errors.ApiError` on failure
 from __future__ import annotations
 
 import copy
+from contextlib import contextmanager
 
 from django.contrib.admin.views.main import ORDER_VAR, PAGE_VAR, SEARCH_VAR
 from django.db import router, transaction
@@ -17,7 +18,7 @@ from ..changelist import PER_PAGE_PARAM, SHAPE_PARAM, describe_columns, get_colu
 from ..errors import ApiError, NotFound, PermissionDeniedError
 from ..nested import ModelPath
 from ..writes import ValidationFailed
-from . import confirm
+from . import confirm, dryrun
 from .tools import (
     ANY_OBJECT,
     CONFIRM_TOKEN_ARG,
@@ -136,18 +137,30 @@ def _write_result(data: dict) -> dict:
     return out
 
 
-def _dry_run(model_admin, request, fn) -> dict:
-    """Run ``fn`` (a write service) and roll everything back, including on_commit callbacks."""
+@contextmanager
+def _rolled_back(model_admin, request):
+    """A dry run: ``request.is_dry_run``, one transaction rolled back (on_commit callbacks are
+    dropped) and outgoing mail captured. Yields the dict that receives ``suppressed_emails``."""
+    report: dict = {}
     request.is_dry_run = True
     try:
-        with transaction.atomic(using=router.db_for_write(model_admin.model)):
-            try:
-                out = {"dry_run": True, "valid": True, **_write_result(fn())}
-            except ValidationFailed as exc:
-                out = {"dry_run": True, "valid": False, "errors": exc.extra}
+        with dryrun.capture_mail() as emails, transaction.atomic(using=router.db_for_write(model_admin.model)):
+            yield report
             transaction.set_rollback(True)
     finally:
         request.is_dry_run = False
+    if emails:
+        report["suppressed_emails"] = [{"recipients": m.recipients(), "subject": m.subject} for m in emails]
+
+
+def _dry_run(model_admin, request, fn) -> dict:
+    """Run ``fn`` (a write service) as a dry run."""
+    with _rolled_back(model_admin, request) as report:
+        try:
+            out = {"dry_run": True, "valid": True, **_write_result(fn())}
+        except ValidationFailed as exc:
+            out = {"dry_run": True, "valid": False, "errors": exc.extra}
+    out.update(report)
     if out["valid"]:
         out["note"] = "Nothing was saved; the pk shown is provisional."
     return out
@@ -172,7 +185,8 @@ def _confirmed_write(site, request, model_admin, token, operation: str, scope: d
     """A gated real write: lock the object's row, spend ``token`` and write in one transaction. A
     failed write rolls the token back to unspent."""
     with transaction.atomic(using=router.db_for_write(model_admin.model)):
-        confirm.verify(site, token, request, operation, scope, confirm.object_state(obj, lock=True))
+        state = confirm.write_state(model_admin, request, obj, lock=True)
+        confirm.verify(site, token, request, operation, scope, state)
         return run()
 
 
@@ -181,7 +195,7 @@ def _guarded_write(site, request, model_admin, args, run, operation: str, scope:
     ``require_dry_run``, a valid dry run issues the ``confirm_token`` that the real write must present."""
     gated = site.requires_dry_run(model_admin)
     if _arg(args, "dry_run", bool, required=False, default=False):
-        state = confirm.object_state(obj) if gated else None
+        state = confirm.write_state(model_admin, request, obj) if gated else None
         out = _dry_run(model_admin, request, run)
         return _issue_confirm_token(site, request, out, operation, scope, state) if gated and out["valid"] else out
     if gated:
@@ -239,14 +253,10 @@ def execute_view(site, request, model_admin, name, *, pk=None, params=None, dry_
         return run()
     if not spec.writes:
         return {**run(), "dry_run": True, "note": "A read-only view; nothing to roll back."}
-    state = confirm.object_state(obj) if gated else None
-    request.is_dry_run = True
-    try:
-        with transaction.atomic(using=router.db_for_write(model_admin.model)):
-            out = {**run(), "dry_run": True, "note": "Nothing was saved: the view ran and was rolled back."}
-            transaction.set_rollback(True)
-    finally:
-        request.is_dry_run = False
+    state = confirm.write_state(model_admin, request, obj) if gated else None
+    with _rolled_back(model_admin, request) as report:
+        out = {**run(), "dry_run": True, "note": "Nothing was saved: the view ran and was rolled back."}
+    out.update(report)
     return _issue_confirm_token(site, request, out, "run_view", scope, state) if gated else out
 
 

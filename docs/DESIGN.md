@@ -679,8 +679,12 @@ urlpatterns += [path("mcp/", mcp_site.urls)]
 - `request.is_mcp` (MCP requests are also `is_api`, so all `api_` twins apply).
 - `request.is_dry_run`: during a dry run the whole pipeline runs (hooks, signals, `LogEntry`,
   reversion) inside `atomic()` and is rolled back; `transaction.on_commit` callbacks are
-  discarded. **Non-DB side effects in hooks still happen**: put them in `on_commit`, or skip
-  them when `request.is_dry_run`.
+  discarded. E-mail is captured (`admin_api/mcp/dryrun.py`): every e-mail backend opened during
+  the dry run collects its messages, which the result lists as `suppressed_emails` (`recipients`,
+  `subject`). The capture is a `ContextVar`, so concurrent requests still send; a connection
+  opened before the dry run still sends. **Other non-DB side effects still happen.**
+  Note: run side effects from `transaction.on_commit` and not from `save()` or a signal, because
+  a dry run drops `on_commit` callbacks. Mail sent from `on_commit` is not in `suppressed_emails`.
 - `ApiRequestMiddleware` sets `is_api`, `is_mcp` and `is_dry_run` to `False` on every request.
 
 ### 14.4 JSON Schema
@@ -732,8 +736,10 @@ or the object changed).
 - The token is a `TimestampSigner` signature (salt `admin_api.mcp.confirm.<site name>`) over a
   random `jti`, stored in `McpConfirmation` (0.1.0a3) with a SHA-256 fingerprint of the user pk,
   the API token pk, the operation, the model path, the parents, the exact `data` / `pk` /
-  `params` and the object's stored row (all concrete fields, read fresh; inline rows are not
-  included). Valid for `AdminMcpSite.confirm_token_max_age` seconds (900).
+  `params`, the object's stored row (all concrete fields, read fresh; inline rows are not
+  included) and the admin's `get_mcp_confirm_state(request, obj)` (default `None`; `obj` is `None`
+  for a create). The hook pins state stored outside the row, such as the last row of a status
+  log, and returns plain values. Valid for `AdminMcpSite.confirm_token_max_age` seconds (900).
 - Single use: the real write spends the row with one conditional `UPDATE` (`jti`, fingerprint,
   `used_at IS NULL`); a replay or a concurrent second call matches no row. A call that does not
   match leaves the token unspent. The real write reads the object's row `FOR UPDATE`, spends the
