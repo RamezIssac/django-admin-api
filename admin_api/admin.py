@@ -1,4 +1,4 @@
-"""Admins for API tokens and MCP user instructions. Registered on the wrapped site by ``AdminApiSite`` (not autodiscovered)."""
+"""Admins for API tokens and MCP user instructions, registered by ``AdminApiSite`` (not autodiscovered)."""
 
 from __future__ import annotations
 
