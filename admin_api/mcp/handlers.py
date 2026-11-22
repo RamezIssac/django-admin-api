@@ -196,6 +196,13 @@ def _empty_search_hint(model_admin, request) -> dict:
     }
 
 
+def _too_many_rows_hint(max_rows) -> str:
+    return gettext(
+        "list_objects pages through the first %(max_rows)s records of a query. For totals, counts or "
+        "groupings run a report (a view under 'views' in list_models); to find records, add filters or search."
+    ) % {"max_rows": max_rows}
+
+
 def _ensure_writable(site):
     if site.read_only:
         raise PermissionDeniedError("This MCP server is read-only.", code="read_only")
@@ -431,6 +438,9 @@ def list_objects(site, request, args) -> dict:
         query[PAGE_VAR] = str(page)
     per_page = _arg(args, "per_page", int, required=False, default=site.default_per_page)
     query[PER_PAGE_PARAM] = str(per_page)
+    max_rows = site.list_max_rows
+    if max_rows and ((page or 1) - 1) * per_page >= max_rows:
+        raise InvalidArguments(_too_many_rows_hint(max_rows))
     query[SHAPE_PARAM] = "columnar"
     data = services.changelist(site.api_site, model_admin, _with_query(request, query))
     data.pop("next", None)
@@ -442,6 +452,9 @@ def list_objects(site, request, args) -> dict:
     data["rows"] = mcp_keys(data["rows"])
     if search and data["count"] == 0:
         data.update(_empty_search_hint(model_admin, request))
+    if max_rows and data["count"] > max_rows:
+        data["pages"] = -(-max_rows // data["per_page"])
+        data["hint"] = _too_many_rows_hint(max_rows)
     return {**head, **data}
 
 
