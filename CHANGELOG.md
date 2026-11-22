@@ -36,8 +36,7 @@
   arguments are `id` and `ids`; `pk` and `pks` stay accepted as aliases for one release. An inline
   row sent with `id` updates that row, and `describe_model`'s update schema names that key `id`.
 - Messages use verbose names and "ID", wrapped in `gettext`: `"No sales with ID 9."`,
-  `"This connection may not change sales."`, `"No view 'x' on sales."`, notes say "the ID shown
-  is provisional". Unknown, hidden and excluded models all answer `"This kind of record is not
+  `"This connection may not change sales."`, `"No view 'x' on sales."`. Unknown, hidden and excluded models all answer `"This kind of record is not
   available here."` (was `No API for app.model` / `No MCP access to app.model`).
 - `import admin_api` works without Django settings: the scope verbs and error default details are
   `gettext_lazy` strings.
@@ -79,14 +78,20 @@
   set their own keep it. Backends receive `limit=` in `search_objects` and
   `search_models`.
 - CI runs the search tests on Postgres 17 (nox session `tests_postgres`).
+- **Per-user MCP instructions.** New model `admin_api.McpUserInstructions` (migration `0003`):
+  one instructions text per user, set in the Django admin (`McpUserInstructionsAdmin`). The default
+  `AdminMcpSite.get_instructions(request)` appends it to the site's instructions, cut at
+  `instructions_max_length` (4,096) with a note.
 - MCP `list_objects` pages through at most `AdminMcpSite.list_max_rows` records of a query (default
   1000, `None` for no cap). A larger query reports only the reachable `pages` and adds a `hint`
   pointing at reports, filters and search; a page past the cap answers `invalid_arguments`.
-- **MCP dry runs capture e-mail.** A dry run rolled back the database but still delivered mail
-  sent from `save()`, a signal or a write view. Now every e-mail backend opened during a dry run
-  collects its messages, and the result lists them as `suppressed_emails` (`recipients`,
-  `subject`). Other non-database side effects still happen: run them from
-  `transaction.on_commit`, which a dry run discards.
+- **MCP dry runs validate only.** `dry_run=true` on `create_object` / `update_object` runs the
+  permission checks, the admin's queryset and its form and inline validation, and saves nothing:
+  no `save_model`, signal, `LogEntry` or e-mail, no transaction to roll back. A write view's dry
+  run checks permissions and params without calling the view. The result is `dry_run`, `valid`
+  and `errors` or `note`; `object` and `totals` come with the real write only.
+  `writes.validate_changeform` is the validation half of `default_process_changeform`; an admin
+  replaces it for dry runs with its own `validate_changeform(request, obj, change)`.
 - **`get_mcp_confirm_state(request, obj)`** on the admin (default on `ApiAdminMixin`: `None`)
   adds state stored outside the object's row, such as the last row of a status log, to the
   `require_dry_run` confirm-token fingerprint. A concurrent change to that state now gets 409
@@ -96,6 +101,23 @@
   `protected`, `can_delete`) and `confirm_required`, and deletes nothing. REST actions are unchanged.
 - Action descriptions are formatted like the admin's action menu: `delete_selected` reads
   "Delete selected sales", not "Delete selected %(verbose_name_plural)s".
+- **New MCP tool `get_history`** (read-only) and REST `GET <pk>/history/`: one record's admin
+  history from `LogEntry`, newest first, each entry with `when`, `user`, `action` (`added`,
+  `changed`, `deleted`) and `message` in the admin's own wording. `limit` defaults to 20, at most
+  100; a `hint` says when older entries exist. Same permission as the admin's history page
+  (`has_view_or_change_permission(obj)` on an object from `get_queryset`). A nested child admin
+  can no longer be named `history`.
+- **Write views log a change.** `@admin_api.view(writes=True)` run on one record (REST and MCP)
+  creates a `LogEntry` like create and update do: `Ran <view title>.` (plus `Via MCP.`), without
+  parameter values. A dry run rolls it back; write views on no single record log nothing.
+- **MCP `list_models` says what the user may do on each model**: `can` (the allowed operations of
+  `view`, `add`, `change`, `delete`) and `actions` (the admin action names `get_actions(request)`
+  allows), next to `views`. `can` replaces the `perms` object in `list_models` and
+  `describe_model`; read-only sites give `["view"]` and no actions. REST keeps `perms`.
+- **Permission errors point to that list.** A 403 `permission_denied` (or `read_only`) and the 404
+  for an action the user may not run add `help`: on MCP "Call list_models to see what you may do
+  on each model.", on REST "GET /api/v1/ to see what you may do on each model." Denials before any
+  model (site access, CSRF, origin) carry no `help`.
 
 ## 0.1.0a3 (2026-11-19)
 

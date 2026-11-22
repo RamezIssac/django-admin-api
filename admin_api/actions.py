@@ -35,6 +35,10 @@ class ActionNotSupported(ApiError):
     code = "action_not_supported"
 
 
+class UnknownAction(NotFound):
+    hint_capabilities = True  # also raised for an action the user may not run
+
+
 class NothingSelected(ApiError):
     status = 400
     code = "nothing_selected"
@@ -72,7 +76,7 @@ def run_action(model_admin, request, name, payload: dict, *, delete_preview: boo
         raise InvalidJson("The action payload must be an object.")
     actions = model_admin.get_actions(request)
     if name not in actions:
-        raise NotFound(f"No action {name!r} (or no permission).")
+        raise UnknownAction(f"No action {name!r} (or no permission).")
     func, name, _description = action_parts(actions[name])
     for perm in getattr(func, "allowed_permissions", ()):
         if perm in scopes.OPS:  # custom permissions are left to has_<perm>_permission

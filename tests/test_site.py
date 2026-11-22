@@ -21,7 +21,7 @@ class TestRegistry:
     def test_non_staff_is_403(self, client, plain_user):
         client.force_login(plain_user)
         status, body = get_json(client)
-        assert status == 403 and body["error"] == "permission_denied"
+        assert status == 403 and body["error"] == "permission_denied" and "help" not in body
 
     def test_superuser_sees_exposed_models_only(self, client, superuser):
         client.force_login(superuser)
@@ -71,7 +71,20 @@ class TestSessionCsrf:
     def test_missing_token_is_rejected(self, rf, superuser):
         resp = self._post_view()(self._request(rf, superuser))
         assert resp.status_code == 403
-        assert json.loads(resp.content)["error"] == "csrf_failed"
+        assert json.loads(resp.content)["error"] == "csrf_failed" and "help" not in json.loads(resp.content)
+
+    def test_denial_without_mounted_urls_has_no_help(self, rf, superuser):
+        from admin_api import AdminApiSite
+        from admin_api.errors import PermissionDeniedError
+        from tests.testapp.admin import site
+
+        def denied(request):
+            raise PermissionDeniedError()
+
+        request = rf.get("/x")
+        request.user = superuser
+        resp = AdminApiSite(site, name="not_mounted", register_token_admin=False).api_view(denied)(request)
+        assert resp.status_code == 403 and "help" not in json.loads(resp.content)
 
     def test_valid_token_passes(self, rf, superuser):
         resp = self._post_view()(self._request(rf, superuser, token=True))

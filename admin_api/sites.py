@@ -5,12 +5,14 @@ from weakref import WeakSet
 
 from django.contrib import admin
 from django.urls import path
+from django.utils.translation import gettext
 from django.views.decorators.csrf import csrf_exempt
 
 from .auth import SessionAuthenticator, TokenAuthenticator
 from .contrib.subadmin import SubAdminAdapter
 from .errors import ApiError, MethodNotAllowed, NotAuthenticated, PermissionDeniedError
 from .mixins import ApiAdminMixin
+from .services import _api_base
 
 _all_sites: WeakSet = WeakSet()
 
@@ -52,12 +54,12 @@ class AdminApiSite:
         _all_sites.add(self)
 
     def register_token_admin(self):
-        """Register the API token and MCP user memory admins on the wrapped admin site (once)."""
-        from .admin import ApiTokenAdmin, McpUserMemoryAdmin
+        """Register the API token and MCP user instructions admins on the wrapped admin site (once)."""
+        from .admin import ApiTokenAdmin, McpUserInstructionsAdmin
         from .auth import get_token_model
-        from .models import McpUserMemory
+        from .models import McpUserInstructions
 
-        for model, model_admin in ((get_token_model(), ApiTokenAdmin), (McpUserMemory, McpUserMemoryAdmin)):
+        for model, model_admin in ((get_token_model(), ApiTokenAdmin), (McpUserInstructions, McpUserInstructionsAdmin)):
             if not self.admin_site.is_registered(model):
                 self.admin_site.register(model, model_admin)
 
@@ -165,8 +167,14 @@ class AdminApiSite:
                 self.authenticate(request)
                 if not self.has_permission(request):
                     raise PermissionDeniedError()
+            except ApiError as exc:  # the index would refuse too: no capabilities hint
+                return exc.as_response()
+            try:
                 return view(request, *args, **kwargs)
             except ApiError as exc:
+                index = exc.hint_capabilities and _api_base(self)
+                if index:  # None when the API urls are not mounted under this site's namespace
+                    exc.extra["help"] = gettext("GET %(url)s to see what you may do on each model.") % {"url": index}
                 return exc.as_response()
 
         return inner
@@ -174,7 +182,7 @@ class AdminApiSite:
     def get_urls(self):
         from .views.changelist import ActionView, ChangeListView, SchemaView
         from .views.custom import CustomViewView
-        from .views.detail import DeletePreviewView, ObjectView
+        from .views.detail import DeletePreviewView, HistoryView, ObjectView
         from .views.nested import NESTED_METHODS, nested_view
         from .views.registry import RegistryView
 
@@ -213,6 +221,7 @@ class AdminApiSite:
                 self.api_view(DeletePreviewView.as_view(api_site=self)),
                 name="delete_preview",
             ),
+            path(f"{model}<str:object_id>/history/", self.api_view(HistoryView.as_view(api_site=self)), name="history"),
             # nested admins: <pk>/<child>/[<pk>/<child>/…] then the same tails as above
             path(
                 f"{model}<path:nested>/",

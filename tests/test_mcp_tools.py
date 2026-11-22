@@ -56,12 +56,12 @@ def test_tools_catalogue(mcp):
         "list_objects",
         "resolve_entities",
         "get_object",
+        "get_history",
         "create_object",
         "update_object",
         "delete_object",
         "run_action",
         "run_view",
-        "set_preference",
         "client_statement",  # @admin_api.view(mcp_tool=...)
         "post_sale",
     ]
@@ -72,8 +72,8 @@ def test_tools_catalogue(mcp):
         "list_objects",
         "resolve_entities",
         "get_object",
+        "get_history",
         "run_view",
-        "set_preference",  # the user's own preferences, not business data
         "client_statement",  # post_sale writes: hidden
     ]
 
@@ -107,8 +107,33 @@ def test_mcp_description_attribute_still_works(rf, superuser):
 
 def test_list_models_read_only_perms(call, data):
     out, _ = call("list_models", site=AdminMcpSite(api_site, read_only=True))
-    perms = {m["model"]: m["perms"] for m in out["models"]}["testapp.sales"]
-    assert perms == {"add": False, "change": False, "delete": False, "view": True}
+    sales = {m["model"]: m for m in out["models"]}["testapp.sales"]
+    assert sales["can"] == ["view"] and "actions" not in sales
+
+
+def test_list_models_says_what_the_user_may_do(call, data):
+    out, _ = call("list_models")
+    sales = {m["model"]: m for m in out["models"]}["testapp.sales"]
+    assert sales["can"] == ["view", "add", "change", "delete"]
+    assert sales["actions"] == ["delete_selected", "mark_posted", "export_csv", "boom"]
+
+    clerk = get_user_model().objects.create_user("clerk", "c@x.io", "pw", is_staff=True)
+    clerk.user_permissions.add(*Permission.objects.filter(codename__in=["view_sales", "add_client"]))
+    out, _ = call("list_models", user=clerk)
+    models = {m["model"]: m for m in out["models"]}
+    assert models["testapp.sales"]["can"] == ["view"]
+    assert models["testapp.sales"]["actions"] == ["export_csv", "boom"]  # mark_posted needs change
+    assert models["testapp.client"]["can"] == ["add"] and "actions" not in models["testapp.client"]
+    clerk.user_permissions.add(Permission.objects.get(codename="view_client"))
+    clerk = get_user_model().objects.get(pk=clerk.pk)  # drop the permission cache
+    out, _ = call("list_models", user=clerk)
+    assert "actions" not in {m["model"]: m for m in out["models"]}["testapp.client"]  # no action allowed
+
+    out, _ = call("list_models", scopes=["testapp.sales:view", "testapp.sales:change"])
+    sales = {m["model"]: m for m in out["models"]}["testapp.sales"]
+    assert sales["can"] == ["view", "change"] and "delete_selected" not in sales["actions"]
+    out, _ = call("describe_model", {"model": "testapp.sales"}, scopes=["testapp.sales:view"])
+    assert out["can"] == ["view"]
 
 
 def test_describe_model(call, data):
@@ -261,17 +286,17 @@ def test_validation_error_envelope(call, data):
     assert out["non_field_errors"] == ["Slug must start with S-."]
 
 
-def test_dry_run_create_rolls_back_everything(call, data, django_capture_on_commit_callbacks):
+def test_dry_run_create_validates_and_saves_nothing(call, data, django_capture_on_commit_callbacks):
     payload = {"slug": "S-9", "client": data["client"].pk, "inlines": {"items": [{"product": "Milk", "price": "7"}]}}
     with django_capture_on_commit_callbacks(execute=True) as callbacks:
         out, err = call("create_object", {"model": "testapp.sales", "data": payload, "dry_run": True})
     assert not err, out
-    assert out["dry_run"] is True and out["valid"] is True and out["object"]["slug"] == "S-9"
+    assert out == {"dry_run": True, "valid": True, "note": "Valid. Nothing was saved; totals come with the real write."}
     assert not Sales.objects.filter(slug="S-9").exists()
     assert not SalesItem.objects.filter(product="Milk").exists()
     assert not LogEntry.objects.exists()
-    assert testadmin.SAVE_LOG == [("S-9", True)]  # hooks ran and could see the dry run
-    assert callbacks == [] and testadmin.ON_COMMIT_LOG == []  # on_commit side effects discarded
+    assert testadmin.SAVE_LOG == []  # save_model is not called
+    assert callbacks == [] and testadmin.ON_COMMIT_LOG == []
 
 
 def test_dry_run_invalid_is_not_an_error(call, data):
@@ -288,7 +313,7 @@ def test_dry_run_update(call, data):
     out, err = call(
         "update_object", {"model": "testapp.sales", "pk": sale.pk, "data": {"status": "draft"}, "dry_run": True}
     )
-    assert not err and out["valid"] and out["object"]["status"] == "draft"
+    assert not err and out["valid"] and "object" not in out
     sale.refresh_from_db()
     assert sale.status == "posted"
 
@@ -372,11 +397,16 @@ def test_permissions_and_scopes(call, data, superuser):
     assert err and out["error"] == "permission_denied"
     out, err = call("list_objects", {"model": "testapp.client"}, scopes=["testapp.sales:view"])
     assert err and out["error"] == "permission_denied"
+    assert out["help"] == "Call list_models to see what you may do on each model."
+    out, err = call("run_action", {"model": "testapp.sales", "action": "mark_posted", "all": True}, user=clerk)
+    assert err and out["error"] == "not_found" and out["help"].startswith("Call list_models")
+    out, err = call("get_object", {"model": "testapp.sales", "pk": 404}, user=clerk)
+    assert err and out["error"] == "not_found" and "help" not in out
 
 
 def test_non_staff_rejected(call, data, plain_user):
     out, err = call("list_models", user=plain_user)
-    assert err and out["error"] == "permission_denied"
+    assert err and out["error"] == "permission_denied" and "help" not in out  # list_models refuses too
 
 
 def test_request_flags_and_unexpected_errors(rf, superuser, data):

@@ -37,3 +37,11 @@ class DeletePreviewView(ModelApiView):
     def get(self, request, app_label, model_name, object_id):
         model_admin = self.get_model_admin(request, app_label, model_name)
         return JsonResponse(services.delete_preview(model_admin, request, object_id))
+
+
+class HistoryView(ModelApiView):
+    """``GET /v1/<app>/<model>/<pk>/history/``: the admin history, newest first (``?limit=``)."""
+
+    def get(self, request, app_label, model_name, object_id):
+        model_admin = self.get_model_admin(request, app_label, model_name)
+        return JsonResponse(services.history(model_admin, request, object_id, request.GET.get("limit")))

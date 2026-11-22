@@ -111,6 +111,7 @@ class TestCreate:
         client.force_login(staff_view_clients)
         resp = client.post("/api/v1/testapp/client/", data="{}", content_type="application/json")
         assert resp.status_code == 403
+        assert resp.json()["help"] == "GET /api/v1/ to see what you may do on each model."
 
 
 @pytest.mark.django_db

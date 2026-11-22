@@ -11,7 +11,6 @@ from django.utils.translation import gettext
 
 from ..auth import TokenAuthenticator
 from ..errors import ApiError, NotAuthenticated, PermissionDeniedError
-from ..memory import DEVELOPER, load_user_memory
 from ..mixins import ApiAdminMixin
 from .resolve import LiveEntityBackend
 from .tools import ToolResult, ToolSpec
@@ -30,26 +29,17 @@ def all_mcp_sites():
     return list(_all_sites)
 
 
-BUSINESS_WORDING = """\
+DEFAULT_INSTRUCTIONS = """\
+This server gives you the user's business records and documents. You act as the user, with exactly their \
+permissions; validation and business rules are the admin's own.
 Talk to the user in business language: name a kind of record by its list_models 'name' or 'name_plural' \
 (e.g. "client"), not its 'model' path; name a record or related record by its 'label'. \
 Say "ID" only when the user asks or two records share a label. If a kind of record is unavailable, say so \
 plainly, without model paths, permission codenames or field names.
-"""
-DEVELOPER_WORDING = """\
-The user is a developer: you may name model paths (app_label.model_name), field names and IDs.
-"""
-DEFAULT_INSTRUCTIONS = (
-    """\
-This server gives you the user's business records and documents. You act as the user, with exactly their \
-permissions; validation and business rules are the admin's own.
-"""
-    + BUSINESS_WORDING
-    + """\
 1. list_models shows what you can access.
 2. Call describe_model before filtering or writing: filters, sortable columns, actions, create/update \
 JSON Schema.
-3. Prefer dry_run=true before create_object/update_object; results include the document's 'totals' when \
+3. Prefer dry_run=true (validation only) before create_object/update_object; real writes return 'totals' when \
 declared. If a dry run is required, a real write needs the confirm_token of a valid dry run of the same \
 write: one per write, valid while the object is unchanged.
 4. delete_object deletes only with confirm=true; otherwise it previews.
@@ -63,7 +53,8 @@ word naming a kind of record ('invoices') resolves under 'models': use it with l
 else ask. 'ambiguous': ask which one before running anything (not a run per candidate), \
 listing each candidate's label and the kind of record. 'none': say nothing matched and offer the unfiltered answer, not a guessed filter or field.
 Errors use the REST envelope (error, detail, fields, non_field_errors, inlines)."""
-)
+USER_INSTRUCTIONS_HEADING = "Instructions for this user (they win where they differ from the above):"
+TRIMMED_NOTE = "\n(Cut here: the instructions are longer than the client accepts.)"
 
 
 class AdminMcpSite:
@@ -80,6 +71,7 @@ class AdminMcpSite:
     confirm_token_max_age = 900  # seconds a dry run's confirm_token stays valid
     list_max_rows = 1000  # list_objects pages through this many rows of a query; None: no cap
     instructions = DEFAULT_INSTRUCTIONS
+    instructions_max_length = 4096  # MCP clients cut server instructions past this length
     # app labels or "app_label.model_name" that resolve_entities never searches
     excluded_models = ("auth", "sessions", "contenttypes", "admin", "admin_api")
     entity_backend_class = LiveEntityBackend
@@ -136,32 +128,22 @@ class AdminMcpSite:
         """The backend ``resolve_entities`` finds candidates with (default: each admin's own search)."""
         return self.entity_backend_class(self)
 
-    def get_user_memory(self, request):
-        """The user's :class:`admin_api.memory.UserMemory`, loaded once and cached on ``request.mcp_memory``."""
-        memory = getattr(request, "mcp_memory", None)
-        if memory is None:
-            memory = request.mcp_memory = load_user_memory(getattr(request, "user", None))
-        return memory
-
     def get_instructions(self, request) -> str:
-        """The server instructions sent to ``request``'s client at ``initialize``: ``instructions``
-        adjusted to the user's audience, language and notes (see :meth:`get_user_memory`)."""
-        memory = self.get_user_memory(request)
-        text = self.instructions
-        if memory.audience == DEVELOPER:
-            text = text.replace(BUSINESS_WORDING, DEVELOPER_WORDING)
-        lines = [text]
-        if memory.language:
-            name = translation.get_language_info(memory.language)["name"]
-            lines.append(f"Answer the user in {name}.")
-        if memory.notes:
-            lines.append(f"The user's own notes for you: {memory.notes}")
-        return "\n".join(lines)
+        """The server instructions sent to ``request``'s client at ``initialize``: ``instructions`` plus the
+        user's :class:`~admin_api.models.McpUserInstructions`, cut to ``instructions_max_length``."""
+        from ..models import McpUserInstructions
+
+        own = None
+        if request.user.is_authenticated:
+            own = McpUserInstructions.objects.filter(user=request.user).values_list("instructions", flat=True).first()
+        text = f"{self.instructions}\n{USER_INSTRUCTIONS_HEADING}\n{own}" if own else self.instructions
+        if len(text) > self.instructions_max_length:
+            text = text[: self.instructions_max_length - len(TRIMMED_NOTE)] + TRIMMED_NOTE
+        return text
 
     def get_language(self, request) -> str | None:
-        """The language tool calls and tool lists run in: the user's ``language`` preference, else
-        ``None`` (keep the active one, e.g. from ``LocaleMiddleware``)."""
-        return self.get_user_memory(request).language
+        """The language tool calls and tool lists run in; ``None`` keeps the active one (``LocaleMiddleware``)."""
+        return None
 
     def translation_override(self, request):
         language = self.get_language(request) if request is not None else None
@@ -223,13 +205,12 @@ class AdminMcpSite:
         raise NotAuthenticated("Send 'Authorization: Bearer <api token>'.")
 
     # --- calling tools -------------------------------------------------------------------------
-    def prepare_request(self, request):
-        """Mark ``request`` as an MCP request (also an API request, so api_ twins apply) and load
-        the user's memory into ``request.mcp_memory``."""
+    @staticmethod
+    def prepare_request(request):
+        """Mark ``request`` as an MCP request (also an API request, so api_ twins apply)."""
         request.is_api = True
         request.is_mcp = True
         request.is_dry_run = False
-        self.get_user_memory(request)
         return request
 
     def call_tool(self, request, name: str, arguments: dict | None) -> ToolResult:
@@ -256,6 +237,8 @@ class AdminMcpSite:
         try:
             return ToolResult(tool.handler(self, request, arguments or {}))
         except ApiError as exc:
+            if exc.hint_capabilities:
+                exc.extra["help"] = gettext("Call list_models to see what you may do on each model.")
             return ToolResult(_error(exc), is_error=True)
         except Exception:
             logger.exception("MCP tool %s failed", name)
