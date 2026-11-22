@@ -5,6 +5,7 @@ import re
 from decimal import Decimal
 
 import pytest
+from django.contrib import admin
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.utils import translation
@@ -12,9 +13,12 @@ from django.utils import translation
 from admin_api import scopes
 from admin_api.errors import PermissionDeniedError
 from admin_api.mcp import AdminMcpSite
+from admin_api.mcp import handlers as mcp_handlers
+from admin_api.mcp.server import build_server
 from admin_api.mcp.sites import DEFAULT_INSTRUCTIONS
 from admin_api.mcp.views import make_view
 from admin_api.models import ApiToken
+from tests.testapp.admin import ValueBandFilter
 from tests.testapp.models import Client, Sales, SalesItem
 from tests.urls import api_site
 
@@ -260,3 +264,166 @@ def test_empty_search_names_searched_fields_and_id_filters(call, data):
 def test_search_with_rows_has_no_hint(call, data):
     out, err = call("list_objects", {"model": "testapp.sales", "search": "S-1"})
     assert not err and out["count"] == 1 and "searched_fields" not in out
+
+
+# --------------------------------------------------------------------------------------------
+# exact messages and notes
+# --------------------------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "name, args, detail",
+    [
+        ("run_view", {"model": "testapp.sales", "view": "nope"}, "No view 'nope' on sales."),
+        ("run_view", {"model": "testapp.sales", "view": "post"}, "View 'post' runs on one record: give its ID."),
+        (
+            "run_view",
+            {"model": "testapp.sales", "view": "publish_all", "id": 1},
+            "View 'publish_all' does not run on one record: no ID expected.",
+        ),
+        ("get_object", {"model": "testapp.sales", "id": [1]}, "'id' has the wrong type."),
+        ("get_object", {"model": "testapp.sales", "id": True}, "'id' has the wrong type."),
+        ("list_objects", {"model": "testapp.sales", "parents": [{}]}, "'parents' must be a list of IDs."),
+        ("create_object", {"model": "testapp.sales", "data": "x"}, "'data' has the wrong type."),
+        ("update_object", {"model": "testapp.sales", "id": 1, "data": "x"}, "'data' has the wrong type."),
+        ("run_action", {"model": "testapp.sales", "action": "mark_posted", "ids": "x"}, "'ids' has the wrong type."),
+        ("resolve_entities", {"terms": [{"text": "a"}], "verbose": "yes"}, "'verbose' must be a boolean."),
+        ("post_sale", {}, "'id' is required."),
+    ],
+)
+def test_argument_messages(call, data, name, args, detail):
+    out, err = call(name, args)
+    assert err and out["detail"] == detail, out
+
+
+def test_permission_messages(call, data, clerk, plain_user):
+    sale = data["sale"].pk
+    out, _ = call("run_view", {"model": "testapp.sales", "view": "post", "id": sale}, user=clerk)
+    assert out["detail"] == "You may not run the view 'post'."
+    out, _ = call("delete_object", {"model": "testapp.sales", "id": sale}, user=clerk)
+    assert out["detail"] == "You may not delete this sales."
+    out, _ = call("create_object", {"model": "testapp.sales", "data": {}}, user=clerk)
+    assert out["detail"] == "You may not add sales."
+    out, _ = call("list_models", user=plain_user)
+    assert out["detail"] == "You may not use this server."
+    out, err = call(
+        "delete_object", {"model": "testapp.sales", "id": sale}, scopes=["testapp.sales:view", "testapp.sales:delete"]
+    )
+    assert not err, out
+
+
+def test_notes_and_hints(call, data):
+    sale = data["sale"].pk
+    out, _ = call("delete_object", {"model": "testapp.sales", "id": sale})
+    assert out["note"] == "Nothing was deleted. Call again with confirm=true to delete."
+    out, _ = call("run_view", {"model": "testapp.sales", "view": "post", "id": sale, "dry_run": True})
+    assert out["note"] == "Nothing was saved: the view ran and was rolled back."
+    statement = {"model": "testapp.client", "view": "statement", "id": data["client"].pk, "dry_run": True}
+    out, err = call("run_view", statement)
+    assert not err and out["dry_run"] is True and out["note"] == "A read-only view; nothing to roll back."
+    gated = AdminMcpSite(api_site, require_dry_run=True)
+    out, _ = call("update_object", {"model": "testapp.sales", "id": sale, "data": {}, "dry_run": True}, site=gated)
+    assert out["note"] == (
+        "Nothing was saved; the ID shown is provisional. To save, repeat the call without dry_run "
+        "and pass this confirm_token."
+    )
+    out, _ = call("list_objects", {"model": "testapp.sales", "search": "nobody"})
+    assert out["hint"] == (
+        "Nothing matched the search text in these fields. To find records of a related record, "
+        "resolve it with resolve_entities and pass its ID to one of these filters."
+    )
+
+
+def test_view_tool_description(mcp):
+    assert mcp.get_tool("post_sale").description == "Post a draft sale. (Same as run_view 'post' on sales.)"
+
+
+# --------------------------------------------------------------------------------------------
+# object-level permissions, ID filters, view output keys
+# --------------------------------------------------------------------------------------------
+@pytest.fixture
+def s1_locked(monkeypatch):
+    """The sales admin refuses to show or delete the sale S-1 itself, but allows sales in general."""
+    sales_admin = api_site.get_model_admin("testapp", "sales")
+    admin_class = type(sales_admin)
+    for name in ("has_view_permission", "has_change_permission", "has_delete_permission"):
+        base = getattr(admin_class, name)
+
+        def check(self, request, obj=None, _base=base):
+            return _base(self, request, obj) and (obj is None or obj.slug != "S-1")
+
+        monkeypatch.setattr(admin_class, name, check)
+
+
+def test_object_level_permissions(call, data, s1_locked):
+    sale = data["sale"].pk
+    out, _ = call("get_object", {"model": "testapp.sales", "id": sale})
+    assert out["detail"] == "You may not view this sales."
+    out, err = call("describe_model", {"model": "testapp.sales", "id": sale})
+    assert err and out["error"] == "permission_denied"
+    for confirm in (False, True):
+        out, _ = call("delete_object", {"model": "testapp.sales", "id": sale, "confirm": confirm})
+        assert out["detail"] == "You may not delete this sales."
+    assert Sales.objects.filter(pk=sale).exists()
+
+
+def test_id_filters_follow_the_api_list_filter(rf, superuser, monkeypatch):
+    admin_class = type(api_site.get_model_admin("testapp", "sales"))
+    monkeypatch.setattr(admin_class, "list_filter", ["status"])
+    api_filters = [ValueBandFilter, "nope", ("client", admin.RelatedOnlyFieldListFilter), "status"]
+    monkeypatch.setattr(admin_class, "api_list_filter", api_filters, raising=False)
+    request = rf.get("/")
+    request.user, request.is_api = superuser, True
+    sales_admin = api_site.get_model_admin("testapp", "sales")
+    assert mcp_handlers._id_filters(sales_admin, request) == ["client__id__exact"]
+    assert mcp_handlers._empty_search_hint(sales_admin, request)["id_filters"] == ["client__id__exact"]
+
+
+def test_view_output_pk_is_renamed_id(call, data, monkeypatch):
+    monkeypatch.setattr(mcp_handlers.services, "run_view", lambda *args, **kwargs: {"pk": 7, "x": 1})
+    out, err = call("run_view", {"model": "testapp.sales", "view": "publish_all"})
+    assert not err and out == {"id": 7, "x": 1}
+
+
+def test_audit_record_takes_id_and_ids(call, data, caplog):
+    sale = data["sale"].pk
+    with caplog.at_level("INFO", logger="admin_api.mcp.audit"):
+        call("get_object", {"model": "testapp.sales", "id": sale})
+        call("get_object", {"model": "testapp.sales", "pk": sale})
+        call("run_action", {"model": "testapp.sales", "action": "mark_posted", "ids": [sale]})
+        call("run_action", {"model": "testapp.sales", "action": "mark_posted", "pks": [sale]})
+    records = [r.mcp_audit for r in caplog.records if hasattr(r, "mcp_audit")]
+    assert [(r["pk"], r["pks"]) for r in records] == [(sale, None), (sale, None), (None, [sale]), (None, [sale])]
+
+
+def test_language_hook_gets_the_request(rf, superuser):
+    seen = []
+
+    class RecordingSite(AdminMcpSite):
+        def get_language(self, request):
+            seen.append(request.user.username)
+
+    request = rf.post("/mcp/")
+    request.user = superuser
+    RecordingSite(api_site).get_tools(request)
+    RecordingSite(api_site).get_tools()  # no request: the hook is not called
+    assert seen == ["root"]
+
+
+def test_server_uses_the_site_instructions_by_default():
+    mcp = AdminMcpSite(api_site)
+    assert build_server(mcp).instructions == mcp.instructions
+    assert build_server(mcp, instructions="custom").instructions == "custom"
+
+
+def test_a_view_the_site_hides_is_not_found(call, data):
+    class NoViews(AdminMcpSite):
+        def is_view_exposed(self, model_admin, spec):
+            return False
+
+    args = {"model": "testapp.sales", "view": "post", "id": data["sale"].pk}
+    out, err = call("run_view", args, site=NoViews(api_site))
+    assert err and out["detail"] == "No view 'post'."
+
+
+def test_an_action_needs_ids_or_all(call, data):
+    out, err = call("run_action", {"model": "testapp.sales", "action": "mark_posted"})
+    assert err and out["error"] == "nothing_selected", out
