@@ -80,7 +80,8 @@
   no `save_model`, signal, `LogEntry` or e-mail, no transaction to roll back. A write view's dry
   run checks permissions and params without calling the view. The result is `dry_run`, `valid`
   and `errors` or `note`; `object` and `totals` come with the real write only.
-  `writes.validate_changeform` is the validation half of `default_process_changeform`.
+  `writes.validate_changeform` is the validation half of `default_process_changeform`; an admin
+  replaces it for dry runs with its own `validate_changeform(request, obj, change)`.
 - **`get_mcp_confirm_state(request, obj)`** on the admin (default on `ApiAdminMixin`: `None`)
   adds state stored outside the object's row, such as the last row of a status log, to the
   `require_dry_run` confirm-token fingerprint. A concurrent change to that state now gets 409

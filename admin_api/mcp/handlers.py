@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import math
+from functools import partial
 
 from django.contrib.admin.utils import NotRelationField, get_fields_from_path
 from django.contrib.admin.views.main import ORDER_VAR, PAGE_VAR, SEARCH_VAR
@@ -219,34 +220,30 @@ def _write_result(data: dict) -> dict:
     return out
 
 
-def _dry_run(request, run) -> dict:
-    """``run(dry_run=True)``: the admin's validation with ``request.is_dry_run`` set; nothing is saved."""
+def _dry_run(site, request, model_admin, check, note: str, operation: str, scope: dict, obj) -> dict:
+    """``check()`` (validation only) with ``request.is_dry_run`` set. With ``require_dry_run``, a valid
+    dry run issues the ``confirm_token`` the real write must present."""
     request.is_dry_run = True
     try:
-        run(dry_run=True)
-    except ValidationFailed as exc:
+        check()
+    except (ValidationFailed, custom_views.InvalidParams) as exc:
         return {"dry_run": True, "valid": False, "errors": mcp_keys(exc.extra)}
     finally:
         request.is_dry_run = False
-    return {
-        "dry_run": True,
-        "valid": True,
-        "note": gettext("Valid. Nothing was saved; totals come with the real write."),
-    }
+    out = {"dry_run": True, "valid": True, "note": note}
+    if site.requires_dry_run(model_admin):
+        state = confirm.write_state(model_admin, request, obj)
+        out["confirm_token"] = confirm.issue(site, request, operation, scope, state)
+        out["note"] = gettext(
+            "Valid. Nothing was saved. To save, repeat the call without dry_run and pass this confirm_token."
+        )
+    return out
 
 
 def _write_scope(request, **arguments) -> dict:
     """What a confirm token covers: the target model and parents plus the write's own arguments."""
     target = request.admin_api_target
     return {"model": target.path.label, "parents": target.parents, **arguments}
-
-
-def _issue_confirm_token(site, request, out: dict, operation: str, scope: dict, state) -> dict:
-    out["confirm_token"] = confirm.issue(site, request, operation, scope, state)
-    out["note"] = gettext(
-        "Valid. Nothing was saved. To save, repeat the call without dry_run and pass this confirm_token."
-    )
-    return out
 
 
 def _confirmed_write(site, request, model_admin, token, operation: str, scope: dict, obj, run):
@@ -259,14 +256,12 @@ def _confirmed_write(site, request, model_admin, token, operation: str, scope: d
 
 
 def _guarded_write(site, request, model_admin, args, run, operation: str, scope: dict, obj=None) -> dict:
-    """A create/update of ``obj`` (``None`` for a create), its permissions already checked: with
-    ``require_dry_run``, a valid dry run issues the ``confirm_token`` that the real write must present."""
-    gated = site.requires_dry_run(model_admin)
+    """A create/update of ``obj`` (``None`` for a create), its permissions already checked. ``run`` is
+    the write service; ``run(dry_run=True)`` validates only."""
     if _arg(args, "dry_run", bool, required=False, default=False):
-        state = confirm.write_state(model_admin, request, obj) if gated else None
-        out = _dry_run(request, run)
-        return _issue_confirm_token(site, request, out, operation, scope, state) if gated and out["valid"] else out
-    if gated:
+        note = gettext("Valid. Nothing was saved; totals come with the real write.")
+        return _dry_run(site, request, model_admin, partial(run, dry_run=True), note, operation, scope, obj)
+    if site.requires_dry_run(model_admin):
         token = args.get("confirm_token")
         return _write_result(_confirmed_write(site, request, model_admin, token, operation, scope, obj, run))
     return _write_result(run())
@@ -323,13 +318,10 @@ def execute_view(site, request, model_admin, name, *, pk=None, params=None, dry_
             return _confirmed_write(site, request, model_admin, confirm_token, "run_view", scope, obj, run)
         return run()
     if not spec.writes:
-        return {**run(), "dry_run": True, "note": gettext("A read-only view; nothing to roll back.")}
-    custom_views.clean_params(spec, request, params or {})
-    out = {"dry_run": True, "valid": True, "note": gettext("Valid. The view did not run; nothing was saved.")}
-    if gated:
-        state = confirm.write_state(model_admin, request, obj)
-        return _issue_confirm_token(site, request, out, "run_view", scope, state)
-    return out
+        return {**run(), "dry_run": True, "note": gettext("A read-only view; it ran and changed nothing.")}
+    check = partial(custom_views.clean_params, spec, request, params or {})
+    note = gettext("Valid. The view did not run; nothing was saved.")
+    return _dry_run(site, request, model_admin, check, note, "run_view", scope, obj)
 
 
 # --------------------------------------------------------------------------------------------
@@ -485,7 +477,7 @@ def create_object(site, request, args) -> dict:
         request,
         model_admin,
         args,
-        lambda dry_run=False: services.create(model_admin, request, data, dry_run=dry_run),
+        partial(services.create, model_admin, request, data),
         "create_object",
         _write_scope(request, data=data),
     )
@@ -503,7 +495,7 @@ def update_object(site, request, args) -> dict:
         request,
         model_admin,
         args,
-        lambda dry_run=False: services.update(model_admin, request, pk, data, partial=True, obj=obj, dry_run=dry_run),
+        partial(services.update, model_admin, request, pk, data, partial=True, obj=obj),
         "update_object",
         _write_scope(request, pk=str(pk), data=data),
         obj,
@@ -792,7 +784,7 @@ TOOLS = [
                 "params": {"type": "object", "description": "Parameters matching the view's params_schema."},
                 "dry_run": {
                     **DRY_RUN_ARG,
-                    "description": "For views with writes=true: run the view, then roll everything back.",
+                    "description": "For views with writes=true: check permissions and params; the view does not run.",
                 },
                 "confirm_token": CONFIRM_TOKEN_ARG,
             },

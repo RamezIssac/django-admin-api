@@ -355,7 +355,7 @@ def test_notes_and_hints(call, data):
     assert out["note"] == "Valid. The view did not run; nothing was saved."
     statement = {"model": "testapp.client", "view": "statement", "id": data["client"].pk, "dry_run": True}
     out, err = call("run_view", statement)
-    assert not err and out["dry_run"] is True and out["note"] == "A read-only view; nothing to roll back."
+    assert not err and out["dry_run"] is True and out["note"] == "A read-only view; it ran and changed nothing."
     gated = AdminMcpSite(api_site, require_dry_run=True)
     out, _ = call("update_object", {"model": "testapp.sales", "id": sale, "data": {}, "dry_run": True}, site=gated)
     assert out["note"] == (

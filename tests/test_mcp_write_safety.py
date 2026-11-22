@@ -484,7 +484,24 @@ def test_view_dry_run_validates_the_params(call, ahmed):
     sale = Sales.objects.create(slug="S-1", client=ahmed)
     args = {"model": "testapp.sales", "view": "post", "pk": sale.pk, "params": {"note": 5}, "dry_run": True}
     out, err = call(AdminMcpSite(api_site), "run_view", args)
-    assert err and out["error"] == "invalid_params"
+    assert not err and out == {"dry_run": True, "valid": False, "errors": {"fields": {"note": ["Expected string."]}}}
+
+
+def test_admin_validate_changeform_replaces_the_default_on_a_dry_run(call, ahmed, monkeypatch):
+    from admin_api.writes import validate_changeform
+
+    def whole_document_check(self, request, obj, change):
+        result = validate_changeform(self, request, obj, change)
+        result.form.add_error(None, "The client is on hold.")
+        result.valid = False
+        return result
+
+    monkeypatch.setattr(
+        type(api_site.get_model_admin("testapp", "sales")), "validate_changeform", whole_document_check, raising=False
+    )
+    out, err = call(AdminMcpSite(api_site), "create_object", create_args(ahmed, dry_run=True))
+    assert not err and out["valid"] is False
+    assert out["errors"] == {"non_field_errors": ["The client is on hold."]}
 
 
 def test_dry_run_reports_form_and_inline_errors(call, ahmed):

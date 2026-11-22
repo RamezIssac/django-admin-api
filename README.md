@@ -153,8 +153,9 @@ the admin's queryset, then runs the admin's form and inline validation (`get_for
 `_create_formsets`, `is_valid`). It calls no `save_form`, `save_model`, `save_related` or `log_*`:
 no signal or side effect runs and nothing is written. A write view's dry run checks the
 permissions and the params and does not call the view. `totals` and values computed on save come
-with the real write. Note: put whole-document checks in the form's or formset's `clean()`, not in
-a custom `process_changeform`, because a dry run calls only the default validation.
+with the real write. Note: an admin with its own `process_changeform` defines
+`validate_changeform(request, obj, change)` too, returning a `writes.ChangeformResult`, because a
+dry run runs that (or the default validation) and never `process_changeform`.
 
 ### Business wording
 

@@ -690,12 +690,14 @@ urlpatterns += [path("mcp/", mcp_site.urls)]
   `def get_mcp_description(self, request): return self.description`.
 - `request.is_mcp` (MCP requests are also `is_api`, so all `api_` twins apply).
 - **Dry runs validate only** (0.1.0a4). `services.create/update(dry_run=True)` run the permission
-  checks and `get_object` (the admin's queryset), build the POST data and call
+  checks and `get_object` (the admin's queryset), build the POST data and call the admin's
+  `validate_changeform(request, obj, change)` when it defines one, else
   `writes.validate_changeform`: `get_form`, `_create_formsets`, `form.is_valid()`, `all_valid`.
   No `save_form`, `save_model`, `save_related`, `log_*` or custom `process_changeform` runs:
   no signals, side effects or writes. `request.is_dry_run` is `True` during the
   validation. A write view's dry run runs `view_object`, the permission checks and `clean_params`
-  and does not call the view. Results: `{"dry_run", "valid", "errors" | "note"}`; `object` and
+  and does not call the view; invalid params give `valid: false`. Results:
+  `{"dry_run", "valid", "errors" | "note"}` plus `confirm_token` when gated; `object` and
   `totals` come with the real write.
 - `ApiRequestMiddleware` sets `is_api`, `is_mcp` and `is_dry_run` to `False` on every request.
 - `AdminMcpSite.get_instructions(request)` is sent at `initialize`; the HTTP view builds one SDK

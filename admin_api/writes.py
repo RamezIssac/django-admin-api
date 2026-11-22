@@ -334,11 +334,10 @@ def default_process_changeform(model_admin, request, obj, change) -> ChangeformR
     result = validate_changeform(model_admin, request, obj, change)
     if not result.valid:
         return result
-    form, formsets = result.form, result.formsets
-    new_object = model_admin.save_form(request, form, change=change)
-    model_admin.save_model(request, new_object, form, change)
-    model_admin.save_related(request, form, formsets, change)
-    change_message = model_admin.construct_change_message(request, form, formsets, not change)
+    new_object = model_admin.save_form(request, result.form, change=change)
+    model_admin.save_model(request, new_object, result.form, change)
+    model_admin.save_related(request, result.form, result.formsets, change)
+    change_message = model_admin.construct_change_message(request, result.form, result.formsets, not change)
     if change:
         model_admin.log_change(request, new_object, change_message)
     else:
@@ -352,13 +351,7 @@ def _revision_context(model_admin, request):
     return create_revision(request) if callable(create_revision) else nullcontext()
 
 
-def run_changeform(model_admin, post_request, obj, change, *, dry_run=False):
-    """Validate and save through the admin's pipeline; ``dry_run`` validates only."""
-    if dry_run:
-        result = validate_changeform(model_admin, post_request, obj, change)
-        if not result.valid:
-            raise ValidationFailed(**result_errors(result))
-        return result
+def run_changeform(model_admin, post_request, obj, change):
     pipeline = getattr(model_admin, "process_changeform", None)
     try:
         with transaction.atomic(using=router.db_for_write(model_admin.model)):
@@ -424,7 +417,13 @@ def _form_errors(form) -> dict:
 def save_from_payload(model_admin, request, obj, payload: dict, *, change: bool, partial: bool, dry_run=False):
     data = build_post_data(model_admin, request, obj, payload, change=change, partial=partial)
     post_request = as_post_request(request, data)
-    result = run_changeform(model_admin, post_request, obj, change, dry_run=dry_run)
+    if dry_run:  # the admin's own validate_changeform(request, obj, change), else the default one
+        own = getattr(model_admin, "validate_changeform", None)
+        result = own(post_request, obj, change) if own else validate_changeform(model_admin, post_request, obj, change)
+        if not result.valid:
+            raise ValidationFailed(**result_errors(result))
+    else:
+        result = run_changeform(model_admin, post_request, obj, change)
     return result, post_request._messages.captured()
 
 
