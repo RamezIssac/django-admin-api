@@ -863,8 +863,8 @@ An opt-in app (`INSTALLED_APPS`, label `admin_api_search`) that stores searchabl
   stored `text` never leaves the server. Model labels are read live under the row's language.
 - **`db` engine.** Table `admin_api_search_entry` (`kind`, `content_type`, `object_pk`, `field`,
   `language`, `text`, `norm`, `updated_at` moved only when `norm` changes, `indexed_at` moved on
-  every write for prune), unique (`content_type`, `object_pk`, `field`, `language`), btree
-  (`content_type`, `object_pk`). On Postgres the migration runs `CREATE EXTENSION IF NOT EXISTS
+  every write for prune), unique (`content_type`, `object_pk`, `field`, `language`), which also
+  serves lookups by (`content_type`, `object_pk`). On Postgres the migration runs `CREATE EXTENSION IF NOT EXISTS
   pg_trgm` and a GIN `gin_trgm_ops` index on `norm` (skipped with a warning when the role may not
   create the extension). Upserts are `INSERT ... ON CONFLICT DO UPDATE` on Postgres and SQLite.
   Pass 1: `norm = q` or `LIKE '%q%'` (terms under 3 characters: exact and prefix), ranked in SQL by

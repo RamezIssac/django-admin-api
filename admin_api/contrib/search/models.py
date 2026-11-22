@@ -25,7 +25,6 @@ class SearchEntry(models.Model):
                 fields=["content_type", "object_pk", "field", "language"], name="admin_api_search_entry_unique"
             )
         ]
-        indexes = [models.Index(fields=["content_type", "object_pk"], name="admin_api_search_entry_obj")]
 
     def __str__(self):
         return self.text
@@ -36,7 +35,6 @@ class SearchIndexState(models.Model):
 
     label = models.CharField(max_length=100, primary_key=True)
     fingerprint = models.CharField(max_length=64)
-    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = "admin_api_search_state"
