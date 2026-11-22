@@ -74,7 +74,8 @@ class TestDetail:
         assert api("get", url(hidden))[0] == 404
 
     def test_not_found(self, api, db):
-        assert api("get", "/api/v1/testapp/sales/999/")[0] == 404
+        status, body = api("get", "/api/v1/testapp/sales/999/")
+        assert status == 404 and "help" not in body  # not a permission error
         assert api("get", "/api/v1/testapp/sales/abc/")[0] == 404
 
     def test_view_permission(self, client, staff_view_clients, sale):

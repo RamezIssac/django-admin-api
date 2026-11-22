@@ -126,6 +126,10 @@ def test_list_models_says_what_the_user_may_do(call, data):
     assert models["testapp.sales"]["can"] == ["view"]
     assert models["testapp.sales"]["actions"] == ["export_csv", "boom"]  # mark_posted needs change
     assert models["testapp.client"]["can"] == ["add"] and "actions" not in models["testapp.client"]
+    clerk.user_permissions.add(Permission.objects.get(codename="view_client"))
+    clerk = get_user_model().objects.get(pk=clerk.pk)  # drop the permission cache
+    out, _ = call("list_models", user=clerk)
+    assert "actions" not in {m["model"]: m for m in out["models"]}["testapp.client"]  # no action allowed
 
     out, _ = call("list_models", scopes=["testapp.sales:view", "testapp.sales:change"])
     sales = {m["model"]: m for m in out["models"]}["testapp.sales"]
