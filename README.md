@@ -134,7 +134,7 @@ Step by step, with scopes, `.mcp.json` and troubleshooting: [Connect Claude Code
 Tools: `list_models`, `describe_model` (columns, filters, actions, custom views, JSON Schema),
 `list_objects` (admin filters, search, ordering, paging), `resolve_entities` (names to ids and
 models), `get_object`, `create_object` /
-`update_object` (with `dry_run`: the full save pipeline, then rolled back), `delete_object`
+`update_object` (with `dry_run`: the admin's validation only, nothing saved), `delete_object`
 (preview unless `confirm=true`), `run_action`, `run_view` (custom views), plus one tool per view
 published with `mcp_tool=`.
 
@@ -148,12 +148,13 @@ On the admin: `mcp_description = "…"` (context for the LLM; a string or a call
 `def get_mcp_description(self, request): return self.description`. In hooks: `request.is_mcp` and
 `request.is_dry_run`.
 
-**Side effects and dry runs.** A dry run runs the whole save (or view) and rolls the database
-back. E-mail sent during it is captured, not delivered, and listed in the result as
-`suppressed_emails` (`recipients` and `subject`). Other side effects (HTTP calls, files, queues)
-still happen. Note: send side effects from `transaction.on_commit` and not from `save()` or a
-signal, because a dry run discards `on_commit` callbacks and rolls back nothing outside the
-database. Mail sent from `on_commit` does not appear in `suppressed_emails`.
+**Dry runs validate only.** A `create_object` / `update_object` dry run checks permissions and
+the admin's queryset, then runs the admin's form and inline validation (`get_form`,
+`_create_formsets`, `is_valid`). It calls no `save_form`, `save_model`, `save_related` or `log_*`:
+no signal or side effect runs and nothing is written. A write view's dry run checks the
+permissions and the params and does not call the view. `totals` and values computed on save come
+with the real write. Note: put whole-document checks in the form's or formset's `clean()`, not in
+a custom `process_changeform`, because a dry run calls only the default validation.
 
 ### Business wording
 
@@ -269,8 +270,8 @@ An engine subclasses `admin_api.contrib.search.engines.base.SearchEngine`: `upse
 ### Safer writes
 
 - **Totals.** `api_totals = ["value", "quantity"]` on the admin (field names, admin methods or
-  model attributes) adds a `totals` entry to the result of `create_object`, `update_object` and
-  their dry runs. The saved document is read back first, so values written by signals are included.
+  model attributes) adds a `totals` entry to the result of `create_object` and `update_object`.
+  The saved document is read back first, so values written by signals are included.
 - **Require a dry run.** `AdminMcpSite(api_site, require_dry_run=True)` makes `create_object`,
   `update_object` and write views refuse a real write unless it passes the `confirm_token` that a
   valid dry run of the same arguments returned. The token works once, within 15 minutes, for the
@@ -329,7 +330,7 @@ class ClientAdmin(admin.ModelAdmin):
 | `detail` | `True`: `method(request, obj, **params)`, at `<pk>/views/<name>/`. `False` (default): `method(request, **params)`, at `views/<name>/` |
 | `params` | a `Form` class (validated; `cleaned_data` passed as arguments; JSON Schema generated from it) or a dict of JSON Schema properties (+ `required=[...]`; `format: date / date-time / time` arrive parsed) |
 | `permissions` | like `@admin.action(permissions=...)`: every `has_<perm>_permission` must pass (`view` = view or change). Default `["view"]` |
-| `writes` | default: `True` when `permissions` asks for more than `view`. Write views are POST only, run in a transaction, need a write token scope, are hidden from read-only MCP sites and support MCP `dry_run`. Read views take GET (query string) or POST (JSON body) |
+| `writes` | default: `True` when `permissions` asks for more than `view`. Write views are POST only, run in a transaction, need a write token scope, are hidden from read-only MCP sites and support MCP `dry_run` (permissions and params checked, the view not called). Read views take GET (query string) or POST (JSON body) |
 | `name`, `title`, `description` | default: method name, derived title, docstring |
 | `mcp_tool="name"` | also publish the view as its own MCP tool (top-level admins) |
 | `api_enabled=False` / `mcp_enabled=False` | hide from both / from MCP only |

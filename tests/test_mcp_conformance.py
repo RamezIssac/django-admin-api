@@ -62,7 +62,7 @@ async def scenario(client, customer_pk) -> dict:
     statement = await client.call_tool("client_statement", {"id": customer_pk, "status": "draft"})
     seen["statement_total"] = statement.structured_content["result"]["total"]
     post = await client.call_tool("run_view", {"model": "testapp.sales", "view": "post", "id": pk, "dry_run": True})
-    seen["view_dry_run"] = (post.structured_content["dry_run"], post.structured_content["result"]["status"])
+    seen["view_dry_run"] = (post.structured_content["dry_run"], post.structured_content["valid"])
     action = await client.call_tool("run_action", {"model": "testapp.sales", "action": "mark_posted", "ids": [pk]})
     seen["action"] = action.structured_content["messages"]
 
@@ -95,7 +95,7 @@ EXPECTED = {
     "value_after_update": "10.00",  # SalesAdmin.save_related: 4 x 2.50
     "listed": ["S-1"],
     "statement_total": "10.00",
-    "view_dry_run": (True, "posted"),  # rolled back: mark_posted below still finds a draft
+    "view_dry_run": (True, True),  # the view did not run: mark_posted below still finds a draft
     "action": [{"level": "info", "text": "1 posted."}],
     "preview_deleted": False,
     "deleted": True,

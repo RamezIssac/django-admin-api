@@ -689,14 +689,14 @@ urlpatterns += [path("mcp/", mcp_site.urls)]
   admin overrides to return another attribute, e.g.
   `def get_mcp_description(self, request): return self.description`.
 - `request.is_mcp` (MCP requests are also `is_api`, so all `api_` twins apply).
-- `request.is_dry_run`: during a dry run the whole pipeline runs (hooks, signals, `LogEntry`,
-  reversion) inside `atomic()` and is rolled back; `transaction.on_commit` callbacks are
-  discarded. E-mail is captured (`admin_api/mcp/dryrun.py`): every e-mail backend opened during
-  the dry run collects its messages, which the result lists as `suppressed_emails` (`recipients`,
-  `subject`). The capture is a `ContextVar`, so concurrent requests still send; a connection
-  opened before the dry run still sends. **Other non-DB side effects still happen.**
-  Note: run side effects from `transaction.on_commit` and not from `save()` or a signal, because
-  a dry run drops `on_commit` callbacks. Mail sent from `on_commit` is not in `suppressed_emails`.
+- **Dry runs validate only** (0.1.0a4). `services.create/update(dry_run=True)` run the permission
+  checks and `get_object` (the admin's queryset), build the POST data and call
+  `writes.validate_changeform`: `get_form`, `_create_formsets`, `form.is_valid()`, `all_valid`.
+  No `save_form`, `save_model`, `save_related`, `log_*` or custom `process_changeform` runs:
+  no signals, side effects or writes. `request.is_dry_run` is `True` during the
+  validation. A write view's dry run runs `view_object`, the permission checks and `clean_params`
+  and does not call the view. Results: `{"dry_run", "valid", "errors" | "note"}`; `object` and
+  `totals` come with the real write.
 - `ApiRequestMiddleware` sets `is_api`, `is_mcp` and `is_dry_run` to `False` on every request.
 - `AdminMcpSite.get_instructions(request)` is sent at `initialize`; the HTTP view builds one SDK
   `Server` per request, stdio asks once at start. Default: `instructions` plus the user's
@@ -741,7 +741,7 @@ Three generic additions to the create/update/dry-run path. None is specific to o
 `api_detail_fields` entries. A write result carries them as `totals` next to `object` (REST:
 `totals` inside the object, like `messages`). `services._saved` reloads the object through the
 admin's queryset after the save, inside the transaction, so values written by signals or
-`QuerySet.update()` show up in `object` and `totals`, in a dry run too.
+`QuerySet.update()` show up in `object` and `totals`.
 
 **`require_dry_run`.** `AdminMcpSite(api_site, require_dry_run=True)` (default `False`); an admin
 overrides it with `mcp_require_dry_run = True | False`. The gate covers `create_object`,

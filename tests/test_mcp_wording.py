@@ -177,10 +177,10 @@ def test_import_needs_no_settings():
     assert result.returncode == 0, result.stderr
 
 
-def test_dry_run_note_says_id(call, data):
+def test_dry_run_note_says_nothing_was_saved(call, data):
     args = {"model": "testapp.sales", "id": data["sale"].pk, "data": {"value": "5"}, "dry_run": True}
     out, err = call("update_object", args)
-    assert not err and out["note"] == "Nothing was saved; the ID shown is provisional."
+    assert not err and out["note"] == "Valid. Nothing was saved; totals come with the real write."
 
 
 def test_view_tool_text(mcp):
@@ -352,15 +352,14 @@ def test_notes_and_hints(call, data):
     out, _ = call("delete_object", {"model": "testapp.sales", "id": sale})
     assert out["note"] == "Nothing was deleted. Call again with confirm=true to delete."
     out, _ = call("run_view", {"model": "testapp.sales", "view": "post", "id": sale, "dry_run": True})
-    assert out["note"] == "Nothing was saved: the view ran and was rolled back."
+    assert out["note"] == "Valid. The view did not run; nothing was saved."
     statement = {"model": "testapp.client", "view": "statement", "id": data["client"].pk, "dry_run": True}
     out, err = call("run_view", statement)
     assert not err and out["dry_run"] is True and out["note"] == "A read-only view; nothing to roll back."
     gated = AdminMcpSite(api_site, require_dry_run=True)
     out, _ = call("update_object", {"model": "testapp.sales", "id": sale, "data": {}, "dry_run": True}, site=gated)
     assert out["note"] == (
-        "Nothing was saved; the ID shown is provisional. To save, repeat the call without dry_run "
-        "and pass this confirm_token."
+        "Valid. Nothing was saved. To save, repeat the call without dry_run and pass this confirm_token."
     )
     out, _ = call("list_objects", {"model": "testapp.sales", "search": "nobody"})
     assert out["hint"] == (

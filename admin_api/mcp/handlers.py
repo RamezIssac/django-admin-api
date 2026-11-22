@@ -21,7 +21,7 @@ from ..changelist import PER_PAGE_PARAM, SHAPE_PARAM, describe_columns, get_colu
 from ..errors import InvalidArguments, NotFound, PermissionDeniedError
 from ..nested import ModelPath
 from ..writes import ValidationFailed
-from . import confirm, dryrun
+from . import confirm
 from .resolve import DEFAULT_LIMIT, MAX_LIMIT, MAX_TERMS, resolve_entities
 from .tools import (
     ANY_OBJECT,
@@ -219,34 +219,20 @@ def _write_result(data: dict) -> dict:
     return out
 
 
-def _rolled_back(model_admin, request, fn) -> dict:
-    """``fn()`` as a dry run: ``request.is_dry_run``, one transaction rolled back (on_commit callbacks
-    dropped), outgoing mail captured and listed under ``suppressed_emails``."""
+def _dry_run(request, run) -> dict:
+    """``run(dry_run=True)``: the admin's validation with ``request.is_dry_run`` set; nothing is saved."""
     request.is_dry_run = True
     try:
-        with dryrun.capture_mail() as emails, transaction.atomic(using=router.db_for_write(model_admin.model)):
-            out = fn()
-            transaction.set_rollback(True)
+        run(dry_run=True)
+    except ValidationFailed as exc:
+        return {"dry_run": True, "valid": False, "errors": mcp_keys(exc.extra)}
     finally:
         request.is_dry_run = False
-    if emails:
-        out["suppressed_emails"] = [{"recipients": m.recipients(), "subject": m.subject} for m in emails]
-    return out
-
-
-def _dry_run(model_admin, request, fn) -> dict:
-    """Run ``fn`` (a write service) as a dry run."""
-
-    def validated():
-        try:
-            return {"dry_run": True, "valid": True, **_write_result(fn())}
-        except ValidationFailed as exc:
-            return {"dry_run": True, "valid": False, "errors": mcp_keys(exc.extra)}
-
-    out = _rolled_back(model_admin, request, validated)
-    if out["valid"]:
-        out["note"] = gettext("Nothing was saved; the ID shown is provisional.")
-    return out
+    return {
+        "dry_run": True,
+        "valid": True,
+        "note": gettext("Valid. Nothing was saved; totals come with the real write."),
+    }
 
 
 def _write_scope(request, **arguments) -> dict:
@@ -258,8 +244,7 @@ def _write_scope(request, **arguments) -> dict:
 def _issue_confirm_token(site, request, out: dict, operation: str, scope: dict, state) -> dict:
     out["confirm_token"] = confirm.issue(site, request, operation, scope, state)
     out["note"] = gettext(
-        "Nothing was saved; the ID shown is provisional. To save, repeat the call without dry_run "
-        "and pass this confirm_token."
+        "Valid. Nothing was saved. To save, repeat the call without dry_run and pass this confirm_token."
     )
     return out
 
@@ -279,7 +264,7 @@ def _guarded_write(site, request, model_admin, args, run, operation: str, scope:
     gated = site.requires_dry_run(model_admin)
     if _arg(args, "dry_run", bool, required=False, default=False):
         state = confirm.write_state(model_admin, request, obj) if gated else None
-        out = _dry_run(model_admin, request, run)
+        out = _dry_run(request, run)
         return _issue_confirm_token(site, request, out, operation, scope, state) if gated and out["valid"] else out
     if gated:
         token = args.get("confirm_token")
@@ -339,10 +324,12 @@ def execute_view(site, request, model_admin, name, *, pk=None, params=None, dry_
         return run()
     if not spec.writes:
         return {**run(), "dry_run": True, "note": gettext("A read-only view; nothing to roll back.")}
-    state = confirm.write_state(model_admin, request, obj) if gated else None
-    note = gettext("Nothing was saved: the view ran and was rolled back.")
-    out = _rolled_back(model_admin, request, lambda: {**run(), "dry_run": True, "note": note})
-    return _issue_confirm_token(site, request, out, "run_view", scope, state) if gated else out
+    custom_views.clean_params(spec, request, params or {})
+    out = {"dry_run": True, "valid": True, "note": gettext("Valid. The view did not run; nothing was saved.")}
+    if gated:
+        state = confirm.write_state(model_admin, request, obj)
+        return _issue_confirm_token(site, request, out, "run_view", scope, state)
+    return out
 
 
 # --------------------------------------------------------------------------------------------
@@ -498,7 +485,7 @@ def create_object(site, request, args) -> dict:
         request,
         model_admin,
         args,
-        lambda: services.create(model_admin, request, data),
+        lambda dry_run=False: services.create(model_admin, request, data, dry_run=dry_run),
         "create_object",
         _write_scope(request, data=data),
     )
@@ -516,7 +503,7 @@ def update_object(site, request, args) -> dict:
         request,
         model_admin,
         args,
-        lambda: services.update(model_admin, request, pk, data, partial=True, obj=obj),
+        lambda dry_run=False: services.update(model_admin, request, pk, data, partial=True, obj=obj, dry_run=dry_run),
         "update_object",
         _write_scope(request, pk=str(pk), data=data),
         obj,

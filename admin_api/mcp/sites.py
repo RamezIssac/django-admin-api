@@ -39,7 +39,7 @@ plainly, without model paths, permission codenames or field names.
 1. list_models shows what you can access.
 2. Call describe_model before filtering or writing: filters, sortable columns, actions, create/update \
 JSON Schema.
-3. Prefer dry_run=true before create_object/update_object; results include the document's 'totals' when \
+3. Prefer dry_run=true (validation only) before create_object/update_object; real writes return 'totals' when \
 declared. If a dry run is required, a real write needs the confirm_token of a valid dry run of the same \
 write: one per write, valid while the object is unchanged.
 4. delete_object deletes only with confirm=true; otherwise it previews.
