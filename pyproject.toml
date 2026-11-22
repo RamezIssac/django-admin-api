@@ -55,6 +55,12 @@ python_files = ["test_*.py"]
 testpaths = ["tests"]  # not mutants/, the copy mutmut runs in
 pythonpath = ["."]
 markers = ["conformance: official MCP client against the real transports (live server, subprocess)"]
+filterwarnings = [
+    "error::DeprecationWarning",
+    "error::PendingDeprecationWarning",
+    "error::ResourceWarning",
+    "error::pytest.PytestUnraisableExceptionWarning",  # a ResourceWarning raised in __del__ arrives as this
+]
 
 [tool.ruff]
 line-length = 120
