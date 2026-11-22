@@ -31,7 +31,7 @@ Package: `admin_api`. Repo: `django-admin-api/`.
 | Validation | DRF serializers | `get_form()` | `get_form()` | `process_changeform()` pipeline |
 | Runs ERP hooks | ✗ | ✗ | ✗ | ✓ |
 | Uses `ChangeList` | own copy | reimplemented | reimplemented | ✓ |
-| Tokens | DRF | ✗ session only | ✓ | ✓ (OAuth later) |
+| Tokens | DRF | ✗ session only | ✓ | ✓ (OAuth: [oauth.md](oauth.md)) |
 
 Ideas borrowed from django-admin-rest-api: delete-preview, nested `inlines` write block
 through real formsets in one transaction, and the error envelope shape.
@@ -446,7 +446,7 @@ PATCH /api/v1/store/sales/7/
 ```python
 class AdminApiSite:
     authenticators = [TokenAuthenticator, SessionAuthenticator]  # v1, as built
-    # later: OAuthAuthenticator (django-oauth-toolkit), added here, nothing else changes
+    # OAuth: a project-side OAuthAuthenticator (django-oauth-toolkit) goes first, see oauth.md
 ```
 
 Each authenticator returns a user, or `None` to let the next one try. Then
@@ -477,8 +477,9 @@ Header: `Authorization: Bearer aapi_<prefix>_<secret>`.
 **Planned expansion:**
 1. **Scopes (built, §9.3).**
 2. **MCP tokens (built):** `kind="mcp"` tokens for MCP clients, filterable in the token admin.
-3. **OAuth 2.1** (with remote MCP): a separate authenticator backed by django-oauth-toolkit.
-   `ApiToken` is untouched, and OAuth access tokens map to the same user and scopes model.
+3. **OAuth 2.1 (documented, [oauth.md](oauth.md)):** a project-side authenticator backed by
+   django-oauth-toolkit. `ApiToken` is untouched, and OAuth access tokens map to the same user
+   and scopes model through `request.api_token`. The library ships no OAuth server.
 4. **Swappable model (built):** `ApiToken.Meta.swappable = "ADMIN_API_TOKEN_MODEL"` with an
    `AbstractApiToken` base, in case a project needs extra columns (org, tenant).
 
@@ -526,7 +527,7 @@ ignore them, so the API used to answer 200 for changes it did not make.
 | MCP server | **built** (§14) |
 | JSON Schema | **built**: `/schema/` → `input_schema` (§14.4) |
 | OpenAPI document | — |
-| OAuth 2.1 (remote MCP connectors) | separate authenticator (django-oauth-toolkit); `AdminMcpSite.authenticators` |
+| OAuth 2.1 (remote MCP connectors) | **documented**: [oauth.md](oauth.md), a project-side authenticator (django-oauth-toolkit) in `AdminMcpSite.authenticators` |
 | `list_editable` bulk edit | — |
 | Async views | — |
 
@@ -583,7 +584,7 @@ Phase 3:
 ### Next
 
 - slick_reporting reports at `/api/v1/reports/<slug>/` + a `run_report` tool.
-- OAuth 2.1 for remote MCP connectors.
+- OAuth 2.1: a packaged authenticator. Today it is the project-side class in [oauth.md](oauth.md).
 - File uploads (multipart) on writes; generic inlines on writes; `list_editable` bulk edit.
 - PyPI distribution name: settled on `django-admin-api-mcp` (`django-admin-api` was taken, and the first alpha shipped as `django-admin-api2`; the import package stays `admin_api`).
 

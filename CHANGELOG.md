@@ -103,6 +103,10 @@
 - **Write views log a change.** `@admin_api.view(writes=True)` run on one record (REST and MCP)
   creates a `LogEntry` like create and update do: `Ran <view title>.` (plus `Via MCP.`), without
   parameter values. A dry run rolls it back; write views on no single record log nothing.
+- **Docs: OAuth in front of the MCP endpoint** ([docs/oauth.md](docs/oauth.md)). django-oauth-toolkit
+  is the authorization server (DCR, CIMD, PKCE, RFC 9728 and RFC 8414 discovery). A project-side
+  `OAuthAuthenticator` in `AdminMcpSite.authenticators` maps the access token to its user and its
+  scopes to library scopes. A 401 points clients at the resource metadata.
 
 ## 0.1.0a3 (2026-11-19)
 
