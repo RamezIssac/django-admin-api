@@ -69,14 +69,10 @@
   set their own keep it. Backends receive `limit=` in `search_objects` and
   `search_models`.
 - CI runs the search tests on Postgres 17 (nox session `tests_postgres`).
-- **Per-user MCP memory.** New model `admin_api.McpUserMemory` (migration `0003`) with
-  `preference` rows per user, and `McpUserMemoryAdmin` (own rows; superusers all).
-  Preferences `audience` (`business` default, `developer`), `language` and `notes` are loaded
-  once per request into `request.mcp_memory` by `AdminMcpSite.get_user_memory(request)`.
-  `get_instructions` now swaps the business-wording paragraph for a developer one and appends
-  the user's language and notes; `get_language` returns the user's language.
-  `AdminMcpSite.prepare_request` is an instance method now.
-- New MCP tool `set_preference(key, value)`: stores or clears one of the caller's preferences.
+- **Per-user MCP instructions.** New model `admin_api.McpUserInstructions` (migration `0003`):
+  one instructions text per user, set in the Django admin (`McpUserInstructionsAdmin`). The default
+  `AdminMcpSite.get_instructions(request)` appends it to the site's instructions, cut at
+  `instructions_max_length` (4,096) with a note.
 
 ## 0.1.0a3 (2026-11-19)
 
