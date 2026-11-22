@@ -9,6 +9,7 @@
   `models` (a top-level `models` is the default for terms without their own), and `for_field` (a create/update relation field or `inlines.<prefix>.<field>`, with the
   field's `limit_choices_to`). Candidates come from each admin's `get_search_results` over its
   `get_queryset(request)`, with its permissions, token scopes and live search fields.
+  The `objects` list names `searched_models` only when its status is `none` or with `verbose=true`.
 - `AdminMcpSite.excluded_models` (and the `excluded_models=` argument): app labels or
   `app_label.model_name` that `resolve_entities` never searches. Default: `auth`, `sessions`,
   `contenttypes`, `admin`, `admin_api`.

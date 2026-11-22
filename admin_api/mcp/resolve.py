@@ -320,15 +320,13 @@ def _object_candidates(hits: list[Hit]) -> list[dict]:
     return out
 
 
-def _resolve_objects(site, request, term: str, targets: list[Target], limit: int) -> dict:
+def _resolve_objects(site, request, term: str, targets: list[Target], limit: int, verbose: bool) -> dict:
     hits, capped = site.get_entity_backend().search_objects(request, term, targets, limit=limit)
     status = list_status((h.confidence, h.match) for h in hits)
-    return {
-        "status": status,
-        "more": capped or len(hits) > limit,
-        "candidates": _object_candidates(hits[:limit]),
-        "searched_models": [t.label for t in targets],
-    }
+    out = {"status": status, "more": capped or len(hits) > limit, "candidates": _object_candidates(hits[:limit])}
+    if verbose or status == "none":
+        out["searched_models"] = [t.label for t in targets]
+    return out
 
 
 def _resolve_models(site, request, term: str, targets: list[Target], limit: int) -> dict:
@@ -349,7 +347,9 @@ def _resolve_models(site, request, term: str, targets: list[Target], limit: int)
     }
 
 
-def _resolve_term(site, request, targets: dict[str, Target], term: dict, limit: int, default_models=None) -> dict:
+def _resolve_term(
+    site, request, targets: dict[str, Target], term: dict, limit: int, default_models=None, verbose: bool = False
+) -> dict:
     if not isinstance(term, dict):
         raise InvalidArguments("Each entry of 'terms' must be an object with 'text'.")
     text = term.get("text")
@@ -379,7 +379,7 @@ def _resolve_term(site, request, targets: dict[str, Target], term: dict, limit: 
         else:
             object_targets = list(targets.values())
         object_targets = [t for t in object_targets if t.search_fields]
-        out["objects"] = _resolve_objects(site, request, text, object_targets, limit)
+        out["objects"] = _resolve_objects(site, request, text, object_targets, limit, verbose)
     if kind in ("any", "models"):
         out["models"] = _resolve_models(site, request, text, list(targets.values()), limit)
     return out
@@ -395,10 +395,13 @@ def resolve_entities(site, request, args) -> dict:
     if not isinstance(limit, int) or isinstance(limit, bool):
         raise InvalidArguments("'limit' must be an integer.")
     limit = max(1, min(limit, MAX_LIMIT))
+    verbose = args.get("verbose", False)
+    if not isinstance(verbose, bool):
+        raise InvalidArguments("'verbose' must be a boolean.")
     targets = allowed_targets(site, request)
     default_models = args.get("models")
     if default_models is not None and (
         not isinstance(default_models, list) or not all(isinstance(m, str) for m in default_models)
     ):
         raise InvalidArguments("'models' must be a list of model labels.")
-    return {"results": [_resolve_term(site, request, targets, term, limit, default_models) for term in terms]}
+    return {"results": [_resolve_term(site, request, targets, term, limit, default_models, verbose) for term in terms]}

@@ -794,7 +794,7 @@ across every model the user can see, in one read-only call.
   top-level `models`: the default for every term without its own `models` or `for_field` and with
   `kind` other than `models`.
   Per term: `objects` and `models`, each `{status, more, candidates}`; `objects` also lists
-  `searched_models`. `kind` (`any`, `objects`, `models`) picks the lists; `models` and
+  `searched_models` when its status is `none` or the call passes `verbose=true`. `kind` (`any`, `objects`, `models`) picks the lists; `models` and
   `for_field` imply `objects`. Object candidates: `model`, `id`, `label` (`str(obj)` read from
   the scoped queryset), `confidence`, `match`, `matched_field`. Model candidates: `model`,
   `label`, `language`, `confidence`, `match`. No other field values leave the server.
