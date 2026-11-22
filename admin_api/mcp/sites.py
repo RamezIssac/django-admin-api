@@ -51,7 +51,7 @@ search does not look into related records; an empty search returns 'searched_fie
 word naming a kind of record ('invoices') resolves under 'models': use it with list_objects or its views. \
 'unique': for a read, use it and name its label; for a write, only when match is 'exact' or 'exact_code', \
 else ask. 'ambiguous': ask which one before running anything (not a run per candidate), \
-listing each candidate's label and the kind of record. 'none': say nothing matched and offer the unfiltered answer, not a guessed filter or field.
+listing each candidate's label and the kind of record. 'none': say nothing matched and ask whether to run it for everyone; run nothing more.
 Errors use the REST envelope (error, detail, fields, non_field_errors, inlines)."""
 USER_INSTRUCTIONS_HEADING = "Instructions for this user (they win where they differ from the above):"
 TRIMMED_NOTE = "\n(Cut here: the instructions are longer than the client accepts.)"
@@ -74,6 +74,7 @@ class AdminMcpSite:
     instructions_max_length = 4096  # MCP clients cut server instructions past this length
     # app labels or "app_label.model_name" that resolve_entities never searches
     excluded_models = ("auth", "sessions", "contenttypes", "admin", "admin_api")
+    excluded_tools = ()  # tool names left out of tools/list, e.g. ("get_history",)
     entity_backend_class = LiveEntityBackend
     # Bearer tokens only: MCP clients are not browsers, and a session cookie must not be enough.
     authenticators = [TokenAuthenticator]
@@ -88,6 +89,7 @@ class AdminMcpSite:
         instructions: str | None = None,
         require_dry_run: bool = False,
         excluded_models=None,
+        excluded_tools=None,
     ):
         self.api_site = api_site
         self.name = name
@@ -98,6 +100,8 @@ class AdminMcpSite:
             self.instructions = instructions
         if excluded_models is not None:
             self.excluded_models = tuple(excluded_models)
+        if excluded_tools is not None:
+            self.excluded_tools = tuple(excluded_tools)
         _all_sites.add(self)
 
     # --- policy hooks (override in a subclass) -------------------------------------------------
@@ -154,13 +158,14 @@ class AdminMcpSite:
         return f"admin_api.mcp.confirm.{self.name}"
 
     def get_tools(self, request=None) -> list[ToolSpec]:
-        """The generic tools plus the views published with ``mcp_tool=``. With a ``request``, a
-        view tool is only listed when the user may run the view (as checked without an object)."""
+        """The generic tools plus the views published with ``mcp_tool=``, minus ``excluded_tools``. With a
+        ``request``, a view tool is only listed when the user may run the view (as checked without an object)."""
         from .handlers import TOOLS
 
         tools = [tool for tool in TOOLS if not (self.read_only and tool.writes)]
         with self.translation_override(request):
-            return tools + self.get_view_tools(request, reserved={t.name for t in tools})
+            tools += self.get_view_tools(request, reserved={t.name for t in tools})
+        return [tool for tool in tools if tool.name not in self.excluded_tools]
 
     def get_view_tools(self, request=None, *, reserved=()) -> list[ToolSpec]:
         from .. import custom_views

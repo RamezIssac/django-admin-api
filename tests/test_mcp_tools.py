@@ -382,6 +382,20 @@ def test_read_only_site_rejects_writes(call, data):
     assert out["actions"] == [] and out["input_schema"] == {"create": None, "update": None}
 
 
+def test_excluded_tools_profile(call, data):
+    qa = AdminMcpSite(api_site, read_only=True, excluded_tools=["get_history", "client_statement"])
+    assert [t.name for t in qa.get_tools()] == [
+        "list_models",
+        "describe_model",
+        "list_objects",
+        "resolve_entities",
+        "get_object",
+        "run_view",
+    ]
+    out, err = call("get_history", {"model": "testapp.sales", "id": data["sales"][0].pk}, site=qa)
+    assert err and out["error"] == "unknown_tool"
+
+
 # --------------------------------------------------------------------------------------------
 # permissions
 # --------------------------------------------------------------------------------------------

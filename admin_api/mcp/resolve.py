@@ -147,7 +147,11 @@ def _form_field(source: Target, request, field: str):
         fields = source.admin.get_form(request, None, change=False).base_fields
     form_field = fields.get(name)
     if not isinstance(form_field, forms.ModelChoiceField):
-        raise InvalidArguments(f"{field!r} is not a relation field of {source.label}'s form.")
+        raise InvalidArguments(
+            f"{field!r} is not a relation field of {source.label}'s form.",
+            help=f"for_field only fills a create/update relation field. To find a {source.label} by name, "
+            f"pass 'models': ['{source.label}'] instead.",
+        )
     return form_field
 
 
@@ -156,9 +160,7 @@ def for_field_target(targets: dict[str, Target], request, for_field) -> Target:
     field's ``limit_choices_to``, as Django's autocomplete does."""
     if not isinstance(for_field, dict) or not isinstance(for_field.get("model"), str) or not for_field.get("field"):
         raise InvalidArguments("'for_field' must be an object with 'model' and 'field'.")
-    source = targets.get(for_field["model"])
-    if source is None:
-        raise NotFound()
+    source = _target(targets, for_field["model"])
     form_field = _form_field(source, request, str(for_field["field"]))
     related = targets.get(form_field.queryset.model._meta.label_lower)
     if related is None:
@@ -328,13 +330,24 @@ def _resolve_models(backend, request, term: str, targets: list[Target], limit: i
     }
 
 
-def _check_labels(value):
-    if value is not None and (not isinstance(value, list) or not all(isinstance(m, str) for m in value)):
+def _target(targets: dict[str, Target], label: str) -> Target:
+    """The target of a model label in any case (``store.Client`` is ``store.client``)."""
+    target = targets.get(label.strip().lower())
+    if target is None:
+        raise InvalidArguments(f"Unknown model {label!r}: use a 'model' from list_models.")
+    return target
+
+
+def _targets(targets: dict[str, Target], labels) -> list[Target] | None:
+    if labels is None:
+        return None
+    if not isinstance(labels, list) or not all(isinstance(m, str) for m in labels):
         raise InvalidArguments("'models' must be a list of model labels.")
+    return list({t.label: t for t in (_target(targets, m) for m in labels)}.values())
 
 
 def _resolve_term(
-    backend, request, targets: dict[str, Target], term: dict, limit: int, default_models, verbose
+    backend, request, targets: dict[str, Target], term: dict, limit: int, default_targets, verbose
 ) -> dict:
     if not isinstance(term, dict):
         raise InvalidArguments("Each entry of 'terms' must be an object with 'text'.")
@@ -342,14 +355,13 @@ def _resolve_term(
     if not isinstance(text, str) or not text.strip():
         raise InvalidArguments("Each term needs a non-empty 'text'.")
     text = text.strip()
-    models_arg, for_field = term.get("models"), term.get("for_field")
+    model_targets, for_field = _targets(targets, term.get("models")), term.get("for_field")
     kind = term.get("kind", "any")
     if kind not in KINDS:
         raise InvalidArguments(f"'kind' must be one of {', '.join(KINDS)}.")
-    if models_arg is None and for_field is None and kind != "models":
-        models_arg = default_models
-    _check_labels(models_arg)
-    if models_arg is not None or for_field is not None:
+    if model_targets is None and for_field is None and kind != "models":
+        model_targets = default_targets
+    if model_targets is not None or for_field is not None:
         if kind == "models":
             raise InvalidArguments(
                 "'models' and 'for_field' narrow an object search; they do not go with kind='models'."
@@ -360,8 +372,8 @@ def _resolve_term(
     if kind in ("any", "objects"):
         if for_field is not None:
             object_targets = [for_field_target(targets, request, for_field)]
-        elif models_arg is not None:
-            object_targets = [targets[m] for m in dict.fromkeys(models_arg) if m in targets]
+        elif model_targets is not None:
+            object_targets = model_targets
         else:
             object_targets = list(targets.values())
         object_targets = [t for t in object_targets if t.search_fields]
@@ -385,7 +397,6 @@ def resolve_entities(site, request, args) -> dict:
     if not isinstance(verbose, bool):
         raise InvalidArguments("'verbose' must be a boolean.")
     targets = allowed_targets(site, request)
-    default_models = args.get("models")
-    _check_labels(default_models)
+    default_targets = _targets(targets, args.get("models"))
     backend = site.get_entity_backend()
-    return {"results": [_resolve_term(backend, request, targets, t, limit, default_models, verbose) for t in terms]}
+    return {"results": [_resolve_term(backend, request, targets, t, limit, default_targets, verbose) for t in terms]}
