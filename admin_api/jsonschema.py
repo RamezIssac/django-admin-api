@@ -8,8 +8,8 @@ Two variants:
 
 * ``create``: required = the form's required fields without an initial value (the API fills
   missing fields from the add form's initial values, given as ``default``); inline rows are new.
-* ``update``: PATCH semantics, nothing is required; inline rows may carry ``pk`` (update that
-  row) and ``"_delete": true``. Rows without ``pk`` are new rows.
+* ``update``: PATCH semantics, nothing is required; inline rows may carry ``pk`` (``id`` on MCP:
+  update that row) and ``"_delete": true``. Rows without it are new rows.
 
 Vendor keywords: ``x-related-model`` (``"app_label.model_name"``) on relation fields.
 """
@@ -156,7 +156,7 @@ def form_object_schema(form_class, *, required: bool, exclude=()) -> dict:
     return out
 
 
-def _inline_schemas(model_admin, request, obj, *, change: bool) -> dict:
+def _inline_schemas(model_admin, request, obj, *, change: bool, row_id: str) -> dict:
     out = {}
     for prefix, FormSet, inline in inline_prefixes(model_admin, request, obj, change):
         fk = getattr(FormSet, "fk", None)
@@ -166,8 +166,8 @@ def _inline_schemas(model_admin, request, obj, *, change: bool) -> dict:
         description = f"Rows of {opts.verbose_name_plural}."
         if change:
             row["properties"] = {
-                "pk": {**_pk_schema(FormSet.model), "description": "Existing row to update; omit for a new row."},
-                ROW_DELETE_KEY: {"type": "boolean", "description": "Delete the existing row given by pk."},
+                row_id: {**_pk_schema(FormSet.model), "description": "Existing row to update; omit for a new row."},
+                ROW_DELETE_KEY: {"type": "boolean", "description": f"Delete the existing row given by {row_id}."},
                 **row["properties"],
             }
             initial = form_initial(FormSet.form, None)
@@ -178,7 +178,7 @@ def _inline_schemas(model_admin, request, obj, *, change: bool) -> dict:
             ]
             description += " Rows not mentioned are kept unchanged."
             if required:
-                description += f" New rows (without pk) need: {', '.join(required)}."
+                description += f" New rows (without {row_id}) need: {', '.join(required)}."
         schema = {"type": "array", "items": row, "description": description}
         if not change and FormSet.max_num is not None:
             schema["maxItems"] = FormSet.max_num
@@ -189,11 +189,11 @@ def _inline_schemas(model_admin, request, obj, *, change: bool) -> dict:
     return out
 
 
-def payload_schema(model_admin, request, obj=None, *, change: bool) -> dict:
+def payload_schema(model_admin, request, obj=None, *, change: bool, row_id: str = "pk") -> dict:
     """Schema of the JSON body for create (``change=False``) or update (``change=True``)."""
     form_class = model_admin.get_form(request, obj, change=change)
     schema = {"$schema": SCHEMA_DIALECT, **form_object_schema(form_class, required=not change)}
-    inlines = _inline_schemas(model_admin, request, obj, change=change)
+    inlines = _inline_schemas(model_admin, request, obj, change=change, row_id=row_id)
     if inlines:
         schema["properties"][INLINES_KEY] = {
             "type": "object",
@@ -204,13 +204,13 @@ def payload_schema(model_admin, request, obj=None, *, change: bool) -> dict:
     return schema
 
 
-def input_schemas(model_admin, request, obj=None) -> dict:
+def input_schemas(model_admin, request, obj=None, *, row_id: str = "pk") -> dict:
     """``{"create": schema | None, "update": schema | None}`` for what ``request.user`` may do."""
     return {
         "create": payload_schema(model_admin, request, None, change=False)
         if obj is None and model_admin.has_add_permission(request)
         else None,
-        "update": payload_schema(model_admin, request, obj, change=True)
+        "update": payload_schema(model_admin, request, obj, change=True, row_id=row_id)
         if model_admin.has_change_permission(request, obj)
         else None,
     }
