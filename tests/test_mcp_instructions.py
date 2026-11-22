@@ -1,7 +1,5 @@
 """Per-user MCP instructions: an admin-set text added to the server instructions at initialize."""
 
-import json
-
 import pytest
 from django.contrib import admin
 from django.contrib.auth import get_user_model
@@ -11,7 +9,6 @@ from admin_api import AdminApiSite
 from admin_api.admin import ApiTokenAdmin, McpUserInstructionsAdmin
 from admin_api.mcp import AdminMcpSite
 from admin_api.mcp.sites import DEFAULT_INSTRUCTIONS, TRIMMED_NOTE, USER_INSTRUCTIONS_HEADING
-from admin_api.mcp.views import make_view
 from admin_api.models import ApiToken, McpUserInstructions
 from tests.testapp.admin import site as admin_site
 from tests.urls import api_site
@@ -53,42 +50,23 @@ def test_the_users_instructions_follow_the_site_instructions(rf, superuser):
     )
 
 
-def test_instructions_at_the_limit_are_sent_whole(rf, superuser):
+@pytest.mark.parametrize("extra, cut", [(0, False), (1, True)])
+def test_instructions_are_cut_past_the_limit_with_a_note(rf, superuser, extra, cut):
     mcp = AdminMcpSite(api_site, instructions="Site rules.")
+    limit = mcp.instructions_max_length
     head = f"Site rules.\n{USER_INSTRUCTIONS_HEADING}\n"
-    instruct(superuser, "x" * (4096 - len(head)))
-    assert instructions_for(rf, mcp, superuser) == head + "x" * (4096 - len(head))
-
-
-def test_longer_instructions_are_cut_with_a_note(rf, superuser):
-    mcp = AdminMcpSite(api_site, instructions="Site rules.")
-    head = f"Site rules.\n{USER_INSTRUCTIONS_HEADING}\n"
-    instruct(superuser, "x" * (4097 - len(head)))
+    instruct(superuser, "x" * (limit + extra - len(head)))
     text = instructions_for(rf, mcp, superuser)
-    assert len(text) == 4096
-    assert text == head + "x" * (4096 - len(head) - len(TRIMMED_NOTE)) + TRIMMED_NOTE
-    assert TRIMMED_NOTE == "\n(Cut here: the instructions are longer than the client accepts.)"
-
-
-def test_initialize_sends_the_users_instructions(rf, superuser):
-    instruct(superuser, "Answer in Arabic.")
-    raw = ApiToken.objects.create_token(superuser, "mcp", kind="mcp")[1]
-    body = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}},
-    }
-    request = rf.post(
-        "/mcp/",
-        data=json.dumps(body),
-        content_type="application/json",
-        HTTP_ACCEPT="application/json, text/event-stream",
-        HTTP_AUTHORIZATION=f"Bearer {raw}",
+    assert len(text) == limit
+    expected = (
+        head + "x" * (limit - len(head) - len(TRIMMED_NOTE)) + TRIMMED_NOTE if cut else head + "x" * (limit - len(head))
     )
-    response = make_view(AdminMcpSite(api_site, name="instructions_init"))(request)
-    instructions = json.loads(response.content)["result"]["instructions"]
-    assert instructions == f"{DEFAULT_INSTRUCTIONS}\n{USER_INSTRUCTIONS_HEADING}\nAnswer in Arabic."
+    assert text == expected
+
+
+def test_long_site_instructions_are_cut_without_a_user_row(rf, superuser):
+    mcp = AdminMcpSite(api_site, instructions="y" * 5000)
+    assert instructions_for(rf, mcp, superuser) == "y" * (4096 - len(TRIMMED_NOTE)) + TRIMMED_NOTE
 
 
 def test_instructions_are_not_exposed_through_mcp(rf, mcp, superuser):

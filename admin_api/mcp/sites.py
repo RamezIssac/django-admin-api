@@ -136,12 +136,10 @@ class AdminMcpSite:
         own = None
         if user is not None and user.is_authenticated:
             own = McpUserInstructions.objects.filter(user=user).values_list("instructions", flat=True).first()
-        if not own:
-            return self.instructions
-        text = f"{self.instructions}\n{USER_INSTRUCTIONS_HEADING}\n{own}"
-        if len(text) <= self.instructions_max_length:
-            return text
-        return text[: self.instructions_max_length - len(TRIMMED_NOTE)] + TRIMMED_NOTE
+        text = f"{self.instructions}\n{USER_INSTRUCTIONS_HEADING}\n{own}" if own else self.instructions
+        if len(text) > self.instructions_max_length:
+            text = text[: self.instructions_max_length - len(TRIMMED_NOTE)] + TRIMMED_NOTE
+        return text
 
     def get_language(self, request) -> str | None:
         """The language tool calls and tool lists run in; ``None`` keeps the active one (``LocaleMiddleware``)."""
