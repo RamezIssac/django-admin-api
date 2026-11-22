@@ -156,16 +156,26 @@ still accepted as aliases of `id` and `ids` for one release. A `list_objects` se
 nothing returns `searched_fields`, `id_filters` (e.g. `client__id__exact`) and a `hint` to filter
 by a resolved ID.
 
+### Per-user instructions
+
+An admin can write instructions for one user in `McpUserInstructions` (app `admin_api`, migration
+`0003`, edited in the Django admin under "MCP user instructions"). They are added after the site's
+instructions each time the user connects, for example "Answer in Arabic." or "I am a developer:
+model paths, field names and IDs are fine." The whole text is cut at
+`AdminMcpSite.instructions_max_length` (4,096 characters) with a note saying so.
+
 Two hooks on `AdminMcpSite` adapt this per request:
 
 ```python
 class ErpMcpSite(AdminMcpSite):
-    def get_instructions(self, request):   # sent at initialize; default: self.instructions
-        return self.instructions + "\nAnswer in English."
+    def get_instructions(self, request):   # sent at initialize
+        return super().get_instructions(request) + "\nThe fiscal year starts in July."
 
     def get_language(self, request):       # tool calls and tool lists run in it; default None
         return "ar"                        # None keeps the active language (LocaleMiddleware)
 ```
+
+New instructions apply from the user's next connection.
 
 ### Resolving names
 

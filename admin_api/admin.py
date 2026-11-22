@@ -1,4 +1,4 @@
-"""Admin for API tokens. Registered on the wrapped site by ``AdminApiSite`` (not autodiscovered)."""
+"""Admins for API tokens and MCP user instructions, registered by ``AdminApiSite`` (not autodiscovered)."""
 
 from __future__ import annotations
 
@@ -106,3 +106,11 @@ class ApiTokenAdmin(admin.ModelAdmin):
             token.revoke()
             count += 1
         self.message_user(request, _("%(count)d token(s) revoked.") % {"count": count})
+
+
+class McpUserInstructionsAdmin(admin.ModelAdmin):
+    api_enabled = False  # never expose instructions through the API itself
+
+    list_display = ["user", "instructions"]
+    search_fields = ["user__username", "instructions"]
+    raw_id_fields = ["user"]

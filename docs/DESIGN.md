@@ -694,10 +694,11 @@ urlpatterns += [path("mcp/", mcp_site.urls)]
   discarded. **Non-DB side effects in hooks still happen**: put them in `on_commit`, or skip
   them when `request.is_dry_run`.
 - `ApiRequestMiddleware` sets `is_api`, `is_mcp` and `is_dry_run` to `False` on every request.
-- `AdminMcpSite.get_instructions(request)` (default: `instructions`) is sent at `initialize`; the
-  HTTP view builds one SDK `Server` per request, stdio asks once at start.
-  `AdminMcpSite.get_language(request)` (default `None`: keep the active language, e.g. from
-  `LocaleMiddleware`) wraps `call_tool` and `get_tools` in `translation.override`.
+- `AdminMcpSite.get_instructions(request)` is sent at `initialize`; the HTTP view builds one SDK
+  `Server` per request, stdio asks once at start. Default: `instructions` plus the user's
+  `McpUserInstructions` (§14.11). `AdminMcpSite.get_language(request)` (default `None`: keep the
+  active language, e.g. from `LocaleMiddleware`) wraps `call_tool` and `get_tools` in
+  `translation.override`.
 
 ### 14.4 JSON Schema
 
@@ -899,6 +900,20 @@ An opt-in app (`INSTALLED_APPS`, label `admin_api_search`) that stores searchabl
 - Tests: `tests/test_search_fold.py`, `test_search_index.py`, `test_search_resolve.py`,
   `test_search_engines.py` (settings, an in-memory engine without `scope_pushdown`),
   `test_search_postgres.py` (nox `tests_postgres`, CI job `postgres` on Postgres 17).
+
+### 14.11 Per-user instructions (0.1.0a4)
+
+- **Store.** `admin_api.McpUserInstructions`: `user` (one-to-one, CASCADE) and `instructions`
+  (text). `admin_api` is in the default `excluded_models` and `McpUserInstructionsAdmin` has
+  `api_enabled = False`: no generic tool lists or reads it. Who may edit a row is the admin's
+  ordinary model permissions.
+- **Instructions.** `get_instructions` runs one query for an authenticated user (none for
+  anonymous) and appends `USER_INSTRUCTIONS_HEADING` and the text after `instructions`. A total
+  over `instructions_max_length` (4,096), with or without a user row, is cut to that length,
+  ending in `TRIMMED_NOTE`.
+- The business wording is the site default; a developer user gets "model paths and field names
+  are fine" in their own instructions.
+- Tests: `tests/test_mcp_instructions.py`.
 
 ## 15. Nested admins (milestone 17, as built)
 

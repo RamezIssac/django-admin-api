@@ -124,3 +124,22 @@ class McpConfirmation(models.Model):
     class Meta:
         verbose_name = _("MCP confirmation")
         verbose_name_plural = _("MCP confirmations")
+
+
+class McpUserInstructions(models.Model):
+    """Instructions an admin writes for one user, added to the MCP server instructions at each connection."""
+
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="mcp_instructions", verbose_name=_("user")
+    )
+    instructions = models.TextField(
+        _("instructions"),
+        help_text=_("Added to the MCP server instructions for this user, e.g. 'Answer in Arabic.'"),
+    )
+
+    class Meta:
+        verbose_name = _("MCP user instructions")
+        verbose_name_plural = _("MCP user instructions")
+
+    def __str__(self):
+        return str(self.user)

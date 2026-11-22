@@ -53,6 +53,8 @@ word naming a kind of record ('invoices') resolves under 'models': use it with l
 else ask. 'ambiguous': ask which one before running anything (not a run per candidate), \
 listing each candidate's label and the kind of record. 'none': say nothing matched and offer the unfiltered answer, not a guessed filter or field.
 Errors use the REST envelope (error, detail, fields, non_field_errors, inlines)."""
+USER_INSTRUCTIONS_HEADING = "Instructions for this user (they win where they differ from the above):"
+TRIMMED_NOTE = "\n(Cut here: the instructions are longer than the client accepts.)"
 
 
 class AdminMcpSite:
@@ -68,6 +70,7 @@ class AdminMcpSite:
     default_per_page = 25
     confirm_token_max_age = 900  # seconds a dry run's confirm_token stays valid
     instructions = DEFAULT_INSTRUCTIONS
+    instructions_max_length = 4096  # MCP clients cut server instructions past this length
     # app labels or "app_label.model_name" that resolve_entities never searches
     excluded_models = ("auth", "sessions", "contenttypes", "admin", "admin_api")
     entity_backend_class = LiveEntityBackend
@@ -125,8 +128,17 @@ class AdminMcpSite:
         return self.entity_backend_class(self)
 
     def get_instructions(self, request) -> str:
-        """The server instructions sent to ``request``'s client at ``initialize`` (default: ``instructions``)."""
-        return self.instructions
+        """The server instructions sent to ``request``'s client at ``initialize``: ``instructions`` plus the
+        user's :class:`~admin_api.models.McpUserInstructions`, cut to ``instructions_max_length``."""
+        from ..models import McpUserInstructions
+
+        own = None
+        if request.user.is_authenticated:
+            own = McpUserInstructions.objects.filter(user=request.user).values_list("instructions", flat=True).first()
+        text = f"{self.instructions}\n{USER_INSTRUCTIONS_HEADING}\n{own}" if own else self.instructions
+        if len(text) > self.instructions_max_length:
+            text = text[: self.instructions_max_length - len(TRIMMED_NOTE)] + TRIMMED_NOTE
+        return text
 
     def get_language(self, request) -> str | None:
         """The language tool calls and tool lists run in; ``None`` keeps the active one (``LocaleMiddleware``)."""

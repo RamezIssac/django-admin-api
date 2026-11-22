@@ -52,13 +52,14 @@ class AdminApiSite:
         _all_sites.add(self)
 
     def register_token_admin(self):
-        """Register the API token admin on the wrapped admin site (once)."""
-        from .admin import ApiTokenAdmin
+        """Register the API token and MCP user instructions admins on the wrapped admin site (once)."""
+        from .admin import ApiTokenAdmin, McpUserInstructionsAdmin
         from .auth import get_token_model
+        from .models import McpUserInstructions
 
-        model = get_token_model()
-        if not self.admin_site.is_registered(model):
-            self.admin_site.register(model, ApiTokenAdmin)
+        for model, model_admin in ((get_token_model(), ApiTokenAdmin), (McpUserInstructions, McpUserInstructionsAdmin)):
+            if not self.admin_site.is_registered(model):
+                self.admin_site.register(model, model_admin)
 
     # --- policy hooks -----------------------------------------------------------------------
     def is_exposed(self, model_admin) -> bool:
