@@ -4,9 +4,9 @@ Setup, tests and the nox matrix are in the README's [Development](README.md#deve
 
 ## Mutation testing
 
-CI's `mutation` job (pull requests only) runs [mutmut](https://github.com/boxed/mutmut) on the `admin_api/` lines the PR
-changed and posts the mutants, kills and survivors (each with its `file:line` and diff) to the job summary and a PR
-comment. It is a report: survivors do not fail the PR. Run the same check locally:
+The `mutation` workflow (`.github/workflows/mutation.yml`, pull requests only) runs
+[mutmut](https://github.com/boxed/mutmut) on the `admin_api/` lines the PR changed and posts the mutants, kills and
+survivors (each with its `file:line` and diff) to the job summary and a PR comment. It is a report: survivors do not fail the PR. Run the same check locally:
 
 ```bash
 uv run --with mutmut==3.8.1 python scripts/mutate_changed.py origin/main   # BASE: the branch the PR targets
