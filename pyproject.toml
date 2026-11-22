@@ -52,6 +52,7 @@ dev = [
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "tests.settings"
 python_files = ["test_*.py"]
+testpaths = ["tests"]  # not mutants/, the copy mutmut runs in
 pythonpath = ["."]
 markers = ["conformance: official MCP client against the real transports (live server, subprocess)"]
 
@@ -61,3 +62,10 @@ extend-exclude = ["**/migrations/**"]
 
 [tool.ruff.lint]
 extend-ignore = ["RUF012"]  # Django declares list_display etc. as mutable class attributes
+
+# scripts/mutate_changed.py: mutation testing of a PR's changed lines (see CONTRIBUTING.md)
+[tool.mutmut]
+source_paths = ["admin_api"]
+mutate_only_covered_lines = true
+# test_stdio's subprocess writes to the stderr mutmut captures and closes
+pytest_add_cli_args = ["-p", "no:cacheprovider", "-q", "--deselect", "tests/test_mcp_conformance.py::test_stdio"]
