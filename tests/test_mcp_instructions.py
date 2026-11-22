@@ -30,6 +30,7 @@ def instruct(user, text):
 
 
 def test_no_row_sends_the_site_instructions(rf, mcp, superuser, django_assert_num_queries):
+    instruct(get_user_model().objects.create_user("other", "o@x.io", "pw"), "Answer in German.")
     with django_assert_num_queries(1):
         assert instructions_for(rf, mcp, superuser) == DEFAULT_INSTRUCTIONS
 
