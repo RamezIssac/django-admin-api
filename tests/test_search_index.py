@@ -276,18 +276,25 @@ def test_portable_upsert_matches_the_native_one(indexed, monkeypatch):
 
     monkeypatch.setattr(db, "UPSERT_VENDORS", ())  # the path for databases without ON CONFLICT
     with indexed():
-        party = Party.objects.create(name="Acme", code="AC-1")
+        client = Client.objects.create(name="Acme")
+        party = Party.objects.create(pk=client.pk, name="Acme", code="AC-1")
         other = Party.objects.create(name="Other")
-    name = SearchEntry.objects.get(object_pk=str(party.pk), field="name")
-    with indexed():
-        party.code = "AC-2"
-        party.save()
     pk, other_pk = str(party.pk), str(other.pk)
-    assert rows(Party) == [(pk, "code", "ac-2"), (pk, "name", "acme"), (other_pk, "name", "other")]
-    renamed = SearchEntry.objects.get(object_pk=pk, field="name")
-    assert renamed.updated_at == name.updated_at and renamed.indexed_at > name.indexed_at
+    assert rows(Party) == [(pk, "code", "ac-1"), (pk, "name", "acme"), (other_pk, "name", "other")]
+    name = SearchEntry.objects.get(object_pk=pk, field="name", content_type__model="party")
+    with indexed():
+        party.name, party.code = "Acme Co", "AC-2"
+        party.save()
+    assert rows(Party) == [(pk, "code", "ac-2"), (pk, "name", "acme co"), (other_pk, "name", "other")]
+    assert rows(Client) == [(str(client.pk), "name", "acme")]
+    renamed = SearchEntry.objects.get(object_pk=pk, field="name", content_type__model="party")
+    assert renamed.updated_at > name.updated_at and renamed.indexed_at > name.indexed_at
+    with indexed():
+        party.save()  # same text: updated_at stays, indexed_at moves
+    again = SearchEntry.objects.get(object_pk=pk, field="name", content_type__model="party")
+    assert again.updated_at == renamed.updated_at and again.indexed_at > renamed.indexed_at
     code = SearchEntry.objects.get(object_pk=pk, field="code")
-    assert (code.kind, code.text) == ("object", "AC-2") and code.updated_at > name.updated_at
+    assert (code.kind, code.text) == ("object", "AC-2")
 
 
 def test_fingerprint_follows_the_engine(indexer, settings):
