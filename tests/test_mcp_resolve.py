@@ -469,16 +469,18 @@ class _RecordingBackend(LiveEntityBackend):
 
     def __init__(self, site):
         super().__init__(site)
-        self.requests = []
+        self.requests, self.limits = [], []
 
     def search_objects(self, request, term, targets, **kwargs):
         self.requests.append(request)
+        self.limits.append(kwargs.get("limit"))
         hits, capped = super().search_objects(request, term, targets, **kwargs)
         sales = next(t for t in targets if t.label == "testapp.sales")
         return [Hit(sales, Sales.objects.get(slug="HIDDEN").pk), *hits], capped
 
     def search_models(self, request, term, targets, **kwargs):
         self.requests.append(request)
+        self.limits.append(kwargs.get("limit"))
         return super().search_models(request, term, targets, **kwargs)
 
 
@@ -493,6 +495,7 @@ def test_entity_backend_seam(rf, superuser, data):
     out = mcp.call_tool(request, "resolve_entities", {"terms": [{"text": "s-1"}]}).data["results"][0]
     assert ids(out["objects"]) == [("testapp.sales", data["sales"]["S-1"].pk)]
     assert len(backends[0].requests) == 2 and all(r is request for r in backends[0].requests)
+    assert backends[0].limits == [5, 5]
 
 
 def test_models_ranked_best_first(resolve, data):

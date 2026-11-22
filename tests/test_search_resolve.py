@@ -1,5 +1,6 @@
 """resolve_entities over the search index (the db engine), with the admin's own scoping."""
 
+import datetime
 from io import StringIO
 
 import pytest
@@ -8,10 +9,11 @@ from django.core.management import call_command
 
 from admin_api import AdminApiSite
 from admin_api.contrib.search.backend import SearchEntityBackend
+from admin_api.contrib.search.indexer import Indexer, set_indexer
 from admin_api.mcp import AdminMcpSite
 from admin_api.mcp.resolve import LiveEntityBackend
-from tests.search_site import api_site, mcp_site, picks
-from tests.testapp.models import Client, Party, Sales
+from tests.search_site import PartyAdmin, api_site, mcp_site, picks
+from tests.testapp.models import Client, Holiday, Party, Sales, Ticket, Vendor, Voucher
 
 
 @pytest.fixture
@@ -161,7 +163,9 @@ def test_models(search_resolve, data, settings):
         ],
     }
     out = search_resolve({"text": "suppliers", "kind": "models"})  # PartyAdmin.search_aliases
-    assert picks(out["models"], "model", "label", "match") == [("testapp.party", "suppliers", "exact")]
+    assert picks(out["models"], "model", "label", "match", "language") == [
+        ("testapp.party", "suppliers", "exact", "en")
+    ]
     out = search_resolve({"text": "sale", "kind": "models"})
     assert picks(out["models"], "model", "match") == [("testapp.sales", "prefix")]
     assert search_resolve({"text": "users", "kind": "models"})["models"]["status"] == "none"  # excluded
@@ -182,3 +186,103 @@ def test_saved_objects_are_found_without_a_rebuild(search_resolve, indexed, inde
         client = Client.objects.create(name="Apex Trading")
     out = search_resolve({"text": "apex", "models": ["testapp.client"]})
     assert picks(out["objects"], "id", "match") == [(client.pk, "prefix")]
+
+
+def rebuild_parties(*names_and_codes):
+    for name, code in names_and_codes:
+        Party.objects.create(name=name, code=code)
+    call_command("rebuild_search_index", "--model", "testapp.party", verbosity=0, stdout=StringIO())
+
+
+@pytest.mark.parametrize(
+    "older, best",
+    [
+        ([("Zedd a", ""), ("Zedd b", "")], "Zed"),  # exact over prefix
+        ([("Ab Zed", ""), ("Cd Zed", "")], "Zedd"),  # prefix over word
+        ([("Ab Zedx", ""), ("Cd Zedy", "")], "Ab Zed"),  # word over word_prefix
+        ([("Abzed", ""), ("Cdzed", "")], "Ab Zedx"),  # word_prefix over contains
+        ([("P1", "abzed"), ("P2", "abzed")], "Zedd"),  # a code field only ranks exact_code on an exact match
+        ([("P1", "zed"), ("P2", "zed")], "Zed"),  # exact (1.0) over exact_code (0.95)
+    ],
+)
+def test_engine_rank_decides_the_top_candidates(search_resolve, indexer, older, best):
+    # the best row is the newest pk: on a tie in rank the older rows would win the two slots
+    rebuild_parties(*older, (best, ""))
+    out = search_resolve({"text": "zed", "models": ["testapp.party"]}, limit=1)
+    assert out["objects"]["candidates"][0]["label"] == best
+
+
+def test_rank_ties_go_to_the_latest_change(search_resolve, indexed):
+    rebuild_parties(("Zedd 1", ""), ("Zedd 2", ""), ("Zedd 3", ""))
+    with indexed():
+        latest = Party.objects.get(name="Zedd 3")
+        latest.name = "Zedd 3x"
+        latest.save()
+    out = search_resolve({"text": "zedd", "models": ["testapp.party"]}, limit=1)
+    assert out["objects"]["candidates"][0]["label"] == "Zedd 3x"
+
+
+def test_search_index_code_fields(search_resolve, indexer, monkeypatch):
+    rebuild_parties(("Acme", ""))
+    assert picks(search_resolve({"text": "acme", "kind": "objects"})["objects"], "match") == [("exact",)]
+    monkeypatch.setattr(PartyAdmin, "search_index_code_fields", ("name",), raising=False)
+    assert picks(search_resolve({"text": "acme", "kind": "objects"})["objects"], "match") == [("exact_code",)]
+
+
+def test_a_term_that_folds_to_nothing_finds_nothing(search_resolve, data):
+    out = search_resolve({"text": "\u0640", "kind": "objects"})  # a lone tatweel
+    assert out["objects"]["status"] == "none" and out["objects"]["more"] is False
+
+
+def test_models_ranked_best_first(search_resolve, indexer, monkeypatch, settings):
+    settings.LANGUAGES = [("en", "English")]
+    monkeypatch.setattr(PartyAdmin, "search_aliases", {"en": ["sales team"]})
+    call_command("rebuild_search_index", "--models-only", verbosity=0, stdout=StringIO())
+    out = search_resolve({"text": "sales", "kind": "models"})
+    assert picks(out["models"], "model", "match") == [("testapp.sales", "exact"), ("testapp.party", "prefix")]
+
+
+class TitleAdmin(admin.ModelAdmin):
+    search_fields = ["title"]
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).exclude(title__startswith="Hidden")
+
+
+class VendorAdmin(admin.ModelAdmin):
+    search_fields = ["name"]
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).exclude(name__startswith="Hidden")
+
+
+pk_types = admin.AdminSite(name="search_pk_types")
+for _model in (Ticket, Voucher, Holiday):
+    pk_types.register(_model, TitleAdmin)
+pk_types.register(Vendor, VendorAdmin)  # its pk is the parent link to Party
+pk_types_mcp = AdminMcpSite(AdminApiSite(pk_types, name="search_pk_types_api"), name="search_pk_types_mcp")
+
+
+@pytest.fixture
+def pk_types_indexed(indexer):
+    set_indexer(Indexer(sites=[pk_types_mcp]))
+    for prefix in ("", "Hidden "):
+        Ticket.objects.create(title=f"{prefix}Zed ticket")
+        Voucher.objects.create(code=f"{prefix}V", title=f"{prefix}Zed voucher")
+        Holiday.objects.create(day=datetime.date(2025, 1, 2 if prefix else 1), title=f"{prefix}Zed holiday")
+        Vendor.objects.create(name=f"{prefix}Zed vendor")
+    call_command("rebuild_search_index", verbosity=0, stdout=StringIO())
+
+
+@pytest.mark.parametrize(
+    "model, label",
+    [
+        ("testapp.ticket", "Zed ticket"),
+        ("testapp.voucher", "Zed voucher"),
+        ("testapp.holiday", "Zed holiday"),
+        ("testapp.vendor", "Zed vendor"),
+    ],
+)
+def test_scoping_matches_each_primary_key_type(search_resolve, pk_types_indexed, model, label):
+    out = search_resolve({"text": "zed", "models": [model]}, site=pk_types_mcp)
+    assert picks(out["objects"], "label") == [(label,)]
