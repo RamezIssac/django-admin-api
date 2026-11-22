@@ -371,8 +371,7 @@ def list_models(site, request, args) -> dict:
             if description:
                 item["description"] = description
             if chain[-1].has_view_or_change_permission(request):
-                actions = [] if site.read_only else list(chain[-1].get_actions(request))
-                if actions:
+                if not site.read_only and (actions := list(chain[-1].get_actions(request))):
                     item["actions"] = actions
                 views = _views(site, request, chain[-1])
                 if views:
