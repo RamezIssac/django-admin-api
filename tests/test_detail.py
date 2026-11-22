@@ -90,7 +90,7 @@ class TestDetail:
 
         before = count()
         SalesItem.objects.bulk_create([SalesItem(sales=sale, product=f"P{i}") for i in range(10)])
-        assert count() == before
+        assert count() == before == 6  # session, user, object, client, tags, items
 
 
 @pytest.mark.django_db

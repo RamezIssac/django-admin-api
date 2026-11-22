@@ -127,11 +127,12 @@ def test_describe_hidden_model(call, data):
 # --------------------------------------------------------------------------------------------
 # reading
 # --------------------------------------------------------------------------------------------
-def test_list_objects_columnar_filters_ordering(call, data):
-    out, err = call(
-        "list_objects",
-        {"model": "testapp.sales", "filters": {"status__exact": "posted"}, "ordering": ["-slug"], "per_page": 2},
-    )
+def test_list_objects_columnar_filters_ordering(call, data, django_assert_num_queries):
+    with django_assert_num_queries(4):  # filter choices, 2 counts, rows
+        out, err = call(
+            "list_objects",
+            {"model": "testapp.sales", "filters": {"status__exact": "posted"}, "ordering": ["-slug"], "per_page": 2},
+        )
     assert not err, out
     assert out["count"] == 3 and out["pages"] == 2 and out["per_page"] == 2
     assert out["columns"][:2] == ["pk", "slug"]
@@ -193,9 +194,10 @@ def test_lookups_on_shown_fields_are_allowed(call, data):
     assert not err and out["count"] == 3
 
 
-def test_get_object(call, data):
+def test_get_object(call, data, django_assert_num_queries):
     sale = data["sales"][0]
-    out, err = call("get_object", {"model": "testapp.sales", "pk": sale.pk})
+    with django_assert_num_queries(4):  # object, client, tags, items
+        out, err = call("get_object", {"model": "testapp.sales", "pk": sale.pk})
     assert not err and out["slug"] == "S-1" and len(out["inlines"]["items"]) == 1
     out, err = call("get_object", {"model": "testapp.sales", "pk": 999})
     assert err and out["error"] == "not_found" and out["status"] == 404

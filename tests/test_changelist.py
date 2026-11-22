@@ -145,7 +145,7 @@ class TestQueryBudget:
         return len(ctx.captured_queries)
 
     def test_fk_column_does_not_cause_n_plus_1(self, api):
-        assert self._count(api, 1) == self._count(api, 20)
+        assert self._count(api, 1) == self._count(api, 20) == 6  # session, user, filter choices, 2 counts, rows
 
 
 @pytest.mark.django_db
