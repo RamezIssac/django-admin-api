@@ -9,9 +9,10 @@ from django.contrib.admin.models import LogEntry
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.core import mail
+from django.core.mail.backends import locmem
 from django.db.models.signals import post_delete, post_save
 
-from admin_api.mcp import AdminMcpSite
+from admin_api.mcp import AdminMcpSite, confirm, dryrun
 from admin_api.models import ApiToken
 from tests.testapp import totals_admin
 from tests.testapp.models import Client, Sales, SalesItem
@@ -223,6 +224,33 @@ def test_confirm_state_hook_accepts_an_unchanged_write(call, gated, ahmed, item_
     assert item_log[-2:] == [None, None]  # a create passes no object
 
 
+def test_write_state_pins_the_row_and_the_hook_value(rf, superuser, ahmed, item_log):
+    sale = Sales.objects.create(slug="S-1", client=ahmed)
+    item = SalesItem.objects.create(sales=sale, product="Milk")
+    request = rf.post("/mcp/")
+    request.user = superuser
+    state = confirm.write_state(api_site.get_model_admin("testapp", "sales"), request, sale)
+    assert state == {"row": Sales.objects.filter(pk=sale.pk).values().first(), "extra": [item.pk]}
+
+
+def test_confirm_state_hook_gets_the_request(call, gated, ahmed, superuser, monkeypatch):
+    users = []
+
+    def get_mcp_confirm_state(self, request, obj):
+        users.append(request.user.username)
+
+    sales_admin = api_site.get_model_admin("testapp", "sales")
+    monkeypatch.setattr(type(sales_admin), "get_mcp_confirm_state", get_mcp_confirm_state, raising=False)
+    sale = Sales.objects.create(slug="S-1", client=ahmed)
+    view = {"pk": sale.pk, "note": "x"}
+    dry, _ = call(gated, "post_sale", {**view, "dry_run": True})
+    assert not call(gated, "post_sale", {**view, "confirm_token": dry["confirm_token"]})[1]
+    update = {"model": "testapp.sales", "pk": sale.pk, "data": {"value": "3"}}
+    dry, _ = call(gated, "update_object", {**update, "dry_run": True})
+    assert not call(gated, "update_object", {**update, "confirm_token": dry["confirm_token"]})[1]
+    assert users == [superuser.username] * 4
+
+
 def test_token_is_bound_to_the_api_token(call, gated, ahmed, superuser):
     token_a = ApiToken.objects.create_token(superuser, "a", kind="mcp")[0]
     token_b = ApiToken.objects.create_token(superuser, "b", kind="mcp")[0]
@@ -409,6 +437,7 @@ def test_view_dry_run_suppresses_mail(call, ahmed):
     out, err = call(site, "run_view", run_view)
     assert not err, out
     assert out["suppressed_emails"] == [{"recipients": ["client@example.com"], "subject": "S-1 posted"}]
+    assert out["note"] == "Nothing was saved: the view ran and was rolled back."
     assert len(mail.outbox) == 0
     sale.refresh_from_db()
     assert sale.status == "draft"
@@ -447,6 +476,18 @@ def test_dry_run_suppresses_mail_sent_through_mailers(call, ahmed, settings):
     finally:
         post_save.disconnect(sender=Sales, dispatch_uid="mailers")
     assert not err and out["suppressed_emails"] == [{"recipients": ["c@example.com"], "subject": "via mailers"}]
+    assert len(mail.outbox) == 0
+
+
+def test_captured_backends_keep_their_arguments_and_report_what_they_sent(db):
+    with dryrun.capture_mail() as captured:
+        by_keyword = mail.get_connection(fail_silently=True)
+        by_position = locmem.EmailBackend(True)
+        with by_keyword as connection:
+            sent = connection.send_messages([mail.EmailMessage("hi", "", to=["a@example.com"])])
+        assert mail.send_mail("s", "", "erp@example.com", ["b@example.com"]) == 1
+    assert by_keyword.fail_silently is True and by_position.fail_silently is True
+    assert sent == 1 and [m.subject for m in captured] == ["hi", "s"]
     assert len(mail.outbox) == 0
 
 
