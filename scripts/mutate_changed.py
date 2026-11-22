@@ -2,7 +2,7 @@
 
     uv run --with mutmut==3.8.1 python scripts/mutate_changed.py [BASE]   # BASE defaults to origin/main
 
-Report only: exits 0 whatever survives. The report also lands in mutants/report.md. See CONTRIBUTING.md.
+Report only: exits 0 whatever survives. The report also lands in mutants/comment.md. See CONTRIBUTING.md.
 """
 
 import os
@@ -37,12 +37,13 @@ summary = Path(os.environ.get("GITHUB_STEP_SUMMARY", os.devnull))
 
 
 def report(text):
-    """Print the report, add it to the job summary and keep a copy in mutants/report.md."""
+    """Print the report, add it to the job summary and keep a copy in mutants/comment.md."""
+    text = "<!-- mutation-report -->\n" + text
     print(text)
     with summary.open("a") as out:
         out.write(text + "\n")
     Path("mutants").mkdir(exist_ok=True)
-    Path("mutants/report.md").write_text(text + "\n")
+    Path("mutants/comment.md").write_text(text + "\n")
 
 
 if not changed:

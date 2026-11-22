@@ -9,3 +9,4 @@ build/
 .lavish/
 .nox/
 mutants/
+api-surface/
