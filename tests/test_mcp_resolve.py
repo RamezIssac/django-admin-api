@@ -1,13 +1,18 @@
 """resolve_entities: names to ids and models, through the admin's own scoping."""
 
+from decimal import Decimal
+
 import pytest
+from django import forms
 from django.contrib import admin
 from django.contrib.auth import get_user_model
-from django.contrib.auth.admin import UserAdmin
+from django.contrib.auth.admin import GroupAdmin, UserAdmin
+from django.contrib.auth.models import Group, Permission
+from django.utils import translation
 
 from admin_api import AdminApiSite
 from admin_api.mcp import AdminMcpSite
-from admin_api.mcp.resolve import LiveEntityBackend
+from admin_api.mcp.resolve import CONFIDENCE, Hit, LiveEntityBackend, list_status, match_text, normalize
 from admin_api.models import ApiToken
 from tests.testapp import admin as testadmin
 from tests.testapp.models import Client, Payment, PaymentLine, Sales, Tag
@@ -27,11 +32,48 @@ site.register(Sales, testadmin.SalesAdmin)
 site.register(Tag, testadmin.TagAdmin)
 site.register(Payment, PaymentAdmin)
 site.register(get_user_model(), UserAdmin)
+site.register(Group, GroupAdmin)
 api_site = AdminApiSite(site, name="resolve_api")
 
 
 class LiveMcpSite(AdminMcpSite):
     entity_backend_class = LiveEntityBackend  # the search backend: tests/test_search_resolve.py
+
+
+class ClientSearchAdmin(admin.ModelAdmin):
+    search_fields = ["^name", "notes__iexact"]
+
+
+class PaymentBySalesValueForm(forms.ModelForm):
+    sales = forms.ModelChoiceField(queryset=Sales.objects.all(), to_field_name="value")
+
+    class Meta:
+        model = Payment
+        fields = ["client", "amount"]
+
+
+class PaymentBySalesValueAdmin(admin.ModelAdmin):
+    form = PaymentBySalesValueForm
+
+
+class ClientNotSearchedByApi(testadmin.ClientAdmin):
+    api_search_fields = []
+
+
+class SalesByApiOrdering(testadmin.SalesAdmin):
+    api_ordering = ["-slug"]
+
+
+custom_site = admin.AdminSite(name="resolve_custom")
+custom_site.register(Client, ClientSearchAdmin)
+custom_site.register(Sales, testadmin.SalesAdmin)
+custom_site.register(Payment, PaymentBySalesValueAdmin)
+custom_api_site = AdminApiSite(custom_site, name="resolve_custom_api")
+
+twins_site = admin.AdminSite(name="resolve_twins")
+twins_site.register(Client, ClientNotSearchedByApi)
+twins_site.register(Sales, SalesByApiOrdering)
+twins_api_site = AdminApiSite(twins_site, name="resolve_twins_api")
 
 
 @pytest.fixture
@@ -154,6 +196,7 @@ def test_token_scope(resolve, data, superuser):
     out = resolve("alpha", scopes=["testapp.sales:view"])
     assert out["objects"]["searched_models"] == ["testapp.sales"]
     assert ids(out["objects"]) == [("testapp.sales", data["sales"]["alpha"].pk)]
+    assert resolve({"text": "payment", "kind": "models"}, scopes=["testapp.sales:view"])["models"]["status"] == "none"
 
 
 def test_excluded_models(resolve, data):
@@ -175,6 +218,7 @@ def test_hidden_model_answers_like_an_unknown_one(resolve, data):
             "candidates": [],
             "searched_models": [],
         }
+    assert resolve({"text": "tag", "kind": "models"})["models"]["status"] == "none"
 
 
 def test_for_field_with_limit_choices_to(resolve, data):
@@ -242,24 +286,37 @@ def test_several_terms(resolve, data):
     assert "models" not in second
 
 
+TERMS_LIST = "'terms' must be a list of at least one term."
+MODELS_LIST = "'models' must be a list of model labels."
+FOR_FIELD_SHAPE = "'for_field' must be an object with 'model' and 'field'."
+
+
 @pytest.mark.parametrize(
-    "args",
+    "args, detail",
     [
-        {"terms": []},
-        {"terms": "ahmed"},
-        {"terms": [{"text": " "}]},
-        {"terms": [{"text": "a", "kind": "rows"}]},
-        {"terms": [{"text": "a", "kind": "models", "models": ["testapp.client"]}]},
-        {"terms": [{"text": "a", "models": "testapp.client"}]},
-        {"terms": [{"text": "a"}], "limit": "5"},
-        {"terms": [{"text": "a"}] * 21},
+        ({"terms": []}, TERMS_LIST),
+        ({"terms": "ahmed"}, TERMS_LIST),
+        ({"terms": ["ahmed"]}, "Each entry of 'terms' must be an object with 'text'."),
+        ({"terms": [{"text": " "}]}, "Each term needs a non-empty 'text'."),
+        ({"terms": [{"text": "a", "kind": "rows"}]}, "'kind' must be one of any, objects, models."),
+        (
+            {"terms": [{"text": "a", "kind": "models", "models": ["testapp.client"]}]},
+            "'models' and 'for_field' narrow an object search; they do not go with kind='models'.",
+        ),
+        ({"terms": [{"text": "a", "models": "testapp.client"}]}, MODELS_LIST),
+        ({"terms": [{"text": "a", "kind": "models"}], "models": "testapp.client"}, MODELS_LIST),
+        ({"terms": [{"text": "a"}], "limit": "5"}, "'limit' must be an integer."),
+        ({"terms": [{"text": "a"}] * 21}, "At most 20 terms per call."),
+        ({"terms": [{"text": "a", "for_field": "client"}]}, FOR_FIELD_SHAPE),
+        ({"terms": [{"text": "a", "for_field": {"model": "testapp.payment"}}]}, FOR_FIELD_SHAPE),
     ],
 )
-def test_bad_arguments(rf, superuser, mcp, db, args):
+def test_bad_arguments(rf, superuser, mcp, db, args, detail):
     request = rf.post("/mcp/")
     request.user = superuser
     result = mcp.call_tool(request, "resolve_entities", args)
     assert result.is_error and result.data["error"] == "invalid_arguments"
+    assert result.data["detail"] == detail
 
 
 def test_to_many_search_field_returns_each_object_once(resolve, data):
@@ -293,3 +350,171 @@ def test_top_level_models_is_the_default_for_each_term(resolve, data, mcp):
     schema = mcp.get_tool("resolve_entities").input_schema
     assert schema["properties"]["models"]["type"] == "array"
     assert resolve("alpha", models="testapp.client")["error"] == "invalid_arguments"
+
+
+@pytest.mark.parametrize(
+    "term, value, code, expected",
+    [
+        ("ahmed ali", "  Ahmed \t ALI ", False, "exact"),
+        ("s-1", "S-1", True, "exact_code"),
+        ("ahm", "Ahmed Ali", False, "prefix"),
+        ("ali", "Ahmed Ali", False, "word"),
+        ("sal", "Ahmed Saleh", False, "word_prefix"),
+        ("med", "Ahmed Ali", False, "contains"),
+        ("", "Ahmed", False, None),
+        ("ahmed", "", False, None),
+        ("bob", "Ahmed", False, None),
+    ],
+)
+def test_match_text(term, value, code, expected):
+    assert match_text(term, value, code=code) == expected
+
+
+def test_normalize():
+    assert normalize("  Ahmed \t ALI ") == "ahmed ali"
+
+
+def _hit(match, confidence=None):
+    return Hit(None, match=match, confidence=CONFIDENCE[match] if confidence is None else confidence)
+
+
+@pytest.mark.parametrize(
+    "hits, status",
+    [
+        ([], "none"),
+        ([_hit("exact"), _hit("prefix")], "unique"),
+        ([_hit("exact"), _hit("exact_code")], "ambiguous"),
+        ([_hit("prefix")], "unique"),
+        ([_hit("search", 0.7)], "unique"),
+        ([_hit("prefix"), _hit("word")], "ambiguous"),
+        ([_hit("contains")], "ambiguous"),
+    ],
+)
+def test_list_status(hits, status):
+    assert list_status(hits) == status
+
+
+def test_term_and_limit_bounds(resolve, data):
+    assert len(resolve(*["ahmed"] * 20)) == 20
+    assert len(resolve("ahmed", limit=0)["objects"]["candidates"]) == 1
+    out = resolve("ahmed", limit=2)
+    assert len(out["objects"]["candidates"]) == 2 and out["objects"]["more"] is False
+    assert resolve({"text": "sales", "kind": "models"}, limit=1)["models"]["more"] is False
+
+
+def test_for_field_error_messages(resolve, data):
+    def detail(field, model="testapp.payment", **kwargs):
+        return resolve({"text": "x", "for_field": {"model": model, "field": field}}, **kwargs)["detail"]
+
+    assert detail("amount") == "'amount' is not a relation field of testapp.payment's form."
+    assert detail("inlines.nope.sales") == "No inline 'nope' on testapp.payment. Inlines: lines."
+    assert detail("inlines.nope.x", model="testapp.client") == "No inline 'nope' on testapp.client. Inlines: none."
+    assert detail("client", model="testapp.nope") == "No MCP access to testapp.nope."
+    no_clients = LiveMcpSite(api_site, excluded_models=("auth", "testapp.client"))
+    assert detail("client", site=no_clients) == "No MCP access to the model behind 'client'."
+
+
+def test_for_field_reads_the_add_form(resolve, data):
+    # a user who may add payments but not change them still sees the add form's fields
+    user = get_user_model().objects.create_user("adder", "a@x.io", "pw", is_staff=True)
+    user.user_permissions.add(*Permission.objects.filter(codename__in=["view_payment", "add_payment", "view_client"]))
+    out = resolve({"text": "alpha", "for_field": {"model": "testapp.payment", "field": "client"}}, user=user)
+    assert ids(out["objects"]) == [("testapp.client", data["clients"]["Alpha"].pk)]
+
+
+def test_for_field_to_field_name_gives_the_id(resolve, data):
+    Sales.objects.filter(slug="S-1").update(value=Decimal("12.50"))
+    field = {"model": "testapp.payment", "field": "sales"}
+    out = resolve({"text": "S-1", "for_field": field}, site=LiveMcpSite(custom_api_site))
+    assert ids(out["objects"]) == [("testapp.sales", "12.50")]
+
+
+def test_search_field_prefixes_and_lookups(resolve, data):
+    Client.objects.create(name="Zed", notes="zed")
+    Client.objects.create(name="Yan", notes="VIP")
+    mcp = LiveMcpSite(custom_api_site)
+    zed = resolve({"text": "zed", "models": ["testapp.client"]}, site=mcp)["objects"]["candidates"]
+    assert [(c["label"], c["match"], c["matched_field"]) for c in zed] == [("Zed", "exact", "name")]
+    vip = resolve({"text": "vip", "models": ["testapp.client"]}, site=mcp)["objects"]["candidates"]
+    assert [(c["label"], c["match"], c["matched_field"]) for c in vip] == [("Yan", "exact", "notes")]
+
+
+def test_scan_limit_caps_and_keeps_exact_matches(resolve, data, monkeypatch):
+    # the newest rows fill the scan; the oldest row still comes back through its exact match
+    monkeypatch.setattr(LiveEntityBackend, "scan_limit", 2)
+    for name in ("Zara", "Zarab", "Zarac", "Zarabb"):
+        Client.objects.create(name=name)
+    mcp = LiveMcpSite(custom_api_site)
+    out = resolve({"text": "zara", "models": ["testapp.client"]}, site=mcp, limit=20)["objects"]
+    assert [(c["label"], c["match"]) for c in out["candidates"]] == [
+        ("Zara", "exact"),
+        ("Zarabb", "prefix"),
+        ("Zarac", "prefix"),
+    ]
+    assert out["status"] == "unique" and out["more"] is True
+    out = resolve({"text": "zarab", "models": ["testapp.client"]}, site=mcp, limit=20)["objects"]
+    assert len(out["candidates"]) == 2 and out["more"] is False
+
+
+def test_api_twins_drive_search_fields_and_ordering(resolve, data):
+    Sales.objects.create(slug="S-3", client=data["clients"]["Alpha"])
+    Sales.objects.create(slug="S-2", client=data["clients"]["Alpha"])
+    out = resolve("s-", site=LiveMcpSite(twins_api_site))["objects"]
+    assert out["searched_models"] == ["testapp.sales"]
+    assert [c["label"] for c in out["candidates"]] == ["S-3", "S-2", "S-1"]
+
+
+class _RecordingBackend(LiveEntityBackend):
+    """Puts a hit outside the scoped queryset first and records the requests it gets."""
+
+    def __init__(self, site):
+        super().__init__(site)
+        self.requests = []
+
+    def search_objects(self, request, term, targets, **kwargs):
+        self.requests.append(request)
+        hits, capped = super().search_objects(request, term, targets, **kwargs)
+        sales = next(t for t in targets if t.label == "testapp.sales")
+        return [Hit(sales, Sales.objects.get(slug="HIDDEN").pk), *hits], capped
+
+    def search_models(self, request, term, targets, **kwargs):
+        self.requests.append(request)
+        return super().search_models(request, term, targets, **kwargs)
+
+
+def test_entity_backend_seam(rf, superuser, data):
+    mcp = LiveMcpSite(api_site)
+    mcp.entity_backend_class = _RecordingBackend
+    assert mcp.get_entity_backend().site is mcp
+    backends = []
+    mcp.get_entity_backend = lambda: backends.append(_RecordingBackend(mcp)) or backends[-1]
+    request = rf.post("/mcp/")
+    request.user = superuser
+    out = mcp.call_tool(request, "resolve_entities", {"terms": [{"text": "s-1"}]}).data["results"][0]
+    assert ids(out["objects"]) == [("testapp.sales", data["sales"]["S-1"].pk)]
+    assert len(backends[0].requests) == 2 and all(r is request for r in backends[0].requests)
+
+
+def test_models_ranked_best_first(resolve, data):
+    out = resolve({"text": "s", "kind": "models"})["models"]["candidates"]
+    assert [(c["model"], c["match"]) for c in out] == [
+        ("testapp.sales", "prefix"),
+        ("testapp.client", "contains"),
+        ("testapp.payment", "contains"),
+    ]
+
+
+def test_models_match_translated_names(resolve, data, settings):
+    open_site = LiveMcpSite(api_site, excluded_models=())
+    settings.LANGUAGES = [("en", "English"), ("de", "German")]
+    out = resolve({"text": "gruppe", "kind": "models"}, site=open_site)["models"]
+    assert out["candidates"] == [
+        {"model": "auth.group", "label": "Gruppe", "language": "de", "confidence": 1.0, "match": "exact"}
+    ]
+
+
+def test_models_use_the_active_language(resolve, data):
+    open_site = LiveMcpSite(api_site, excluded_models=())
+    with translation.override("de"):
+        out = resolve({"text": "benutzer", "kind": "models"}, site=open_site)["models"]
+    assert [(c["model"], c["language"]) for c in out["candidates"]] == [("auth.user", "de")]
