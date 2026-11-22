@@ -44,8 +44,7 @@ def object_state(obj, *, lock: bool = False) -> dict | None:
 def write_state(model_admin, request, obj, *, lock: bool = False) -> dict:
     """What a confirm token pins: the object's stored row and the admin's extra state, such as
     the last row of a log the write appends to (``get_mcp_confirm_state``)."""
-    hook = getattr(model_admin, "get_mcp_confirm_state", None)
-    return {"row": object_state(obj, lock=lock), "extra": hook(request, obj) if hook else None}
+    return {"row": object_state(obj, lock=lock), "extra": model_admin.get_mcp_confirm_state(request, obj)}
 
 
 def fingerprint(request, operation: str, scope: dict, state) -> str:

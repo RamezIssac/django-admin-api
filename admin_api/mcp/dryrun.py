@@ -1,10 +1,5 @@
-"""Mail capture for MCP dry runs: e-mail sent while a dry run runs is kept, not delivered.
-
-Every e-mail backend opened inside :func:`capture_mail` (``send_mail``, ``mailers``, ``get_connection``
-or a backend built by hand) collects its messages instead of sending them. The capture is per
-context (a ``ContextVar``): a concurrent real request still sends. A connection opened before
-the dry run still sends.
-"""
+"""Mail capture for MCP dry runs: every e-mail backend built inside :func:`capture_mail` collects its
+messages instead of sending them, per context (docs/DESIGN.md, dry runs)."""
 
 from __future__ import annotations
 
@@ -26,10 +21,12 @@ def _init(self, *args, **kwargs):
         self.send_messages = lambda messages: captured.extend(messages) or len(messages)
 
 
+BaseEmailBackend.__init__ = _init
+
+
 @contextmanager
 def capture_mail():
     """Yield a list that collects every message sent in this block instead of delivering it."""
-    BaseEmailBackend.__init__ = _init
     messages: list = []
     reset = _captured.set(messages)
     try:
