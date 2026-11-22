@@ -47,6 +47,7 @@ dev = [
     "jsonschema>=4.20",
     # optional integration (admin_api.contrib.subadmin); tests skip without it
     "django-subadmin>=5.2",
+    "pillow>=12.3.0",
 ]
 
 [tool.pytest.ini_options]

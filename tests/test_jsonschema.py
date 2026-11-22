@@ -123,8 +123,9 @@ def test_field_schema(field, expected):
     assert {k: schema[k] for k in expected} == expected
 
 
-def test_file_fields_are_left_out():
-    assert field_schema(forms.FileField()) is None
+def test_file_fields_take_an_upload_object():
+    assert field_schema(forms.FileField())["required"] == ["filename", "content_base64"]
+    assert field_schema(forms.ImageField(required=False))["type"] == ["object", "null"]
 
 
 def test_describe_form_types_decimal_and_float():

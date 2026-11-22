@@ -118,6 +118,16 @@
   for an action the user may not run add `help`: on MCP "Call list_models to see what you may do
   on each model.", on REST "GET /api/v1/ to see what you may do on each model." Denials before any
   model (site access, CSRF, origin) carry no `help`.
+- **File and image fields are writable** (REST and MCP, main form and inline rows):
+  `{"filename", "content_base64"}` becomes an `UploadedFile` before the admin form runs, so the
+  admin's own validation applies. `null` clears an optional file; leaving the field out keeps it.
+  `AdminApiSite.max_upload_size` caps each file (default 5 MiB); bad base64, a bad file name or a
+  file over the cap is a field error. Before, any write to an admin with a file field failed.
+- File values read as `{"name", "url"}` (were the name alone).
+- `input_schema` describes file fields as `{filename, content_base64}` (they were left out).
+- An MCP dry run validates uploads and stores no file.
+- A body over `DATA_UPLOAD_MAX_MEMORY_SIZE` answers `413 payload_too_large` as JSON (REST and MCP
+  HTTP), not Django's HTML 400.
 
 ## 0.1.0a3 (2026-11-19)
 

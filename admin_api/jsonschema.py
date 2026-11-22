@@ -11,6 +11,8 @@ Two variants:
 * ``update``: PATCH semantics, nothing is required; inline rows may carry ``pk`` (``id`` on MCP:
   update that row) and ``"_delete": true``. Rows without it are new rows.
 
+File fields take ``{"filename", "content_base64"}``; ``null`` clears an optional file.
+
 Vendor keywords: ``x-related-model`` (``"app_label.model_name"``) on relation fields.
 """
 
@@ -23,7 +25,7 @@ from django.utils.translation import gettext_lazy as _
 
 from .detail import inline_prefixes
 from .encoders import encode_value
-from .writes import INLINES_KEY, ROW_DELETE_KEY, form_initial
+from .writes import INLINES_KEY, ROW_DELETE_KEY, UPLOAD_KEYS, form_initial
 
 # ModelAdmin.formfield_for_manytomany appends this widget hint to M2M help texts
 _M2M_WIDGET_HINT = _("Hold down “Control”, or “Command” on a Mac, to select more than one.")
@@ -51,12 +53,22 @@ def _pk_schema(model, to_field_name=None) -> dict:
     return {"type": "string"}
 
 
-def field_schema(form_field) -> dict | None:
-    """JSON Schema for one form field, or ``None`` if the JSON API cannot set it (files)."""
+def field_schema(form_field) -> dict:
+    """JSON Schema for one form field."""
     f = form_field
     if isinstance(f, forms.FileField):
-        return None
-    if isinstance(f, forms.ModelMultipleChoiceField):
+        filename, content = UPLOAD_KEYS
+        schema = {
+            "type": "object",
+            "properties": {
+                filename: {"type": "string", "minLength": 1},
+                content: {"type": "string", "contentEncoding": "base64"},
+            },
+            "required": list(UPLOAD_KEYS),
+            "additionalProperties": False,
+            "description": "Upload: the file name and the content in base64. Leave the field out to keep the file.",
+        }
+    elif isinstance(f, forms.ModelMultipleChoiceField):
         model = f.queryset.model
         schema = {"type": "array", "items": _pk_schema(model, f.to_field_name), "uniqueItems": True}
         schema["x-related-model"] = f"{model._meta.app_label}.{model._meta.model_name}"
@@ -141,8 +153,6 @@ def form_object_schema(form_class, *, required: bool, exclude=()) -> dict:
         if name in exclude:
             continue
         schema = field_schema(f)
-        if schema is None:
-            continue
         if required and _has_value(initial.get(name)):
             default = encode_value(initial[name])
             if isinstance(default, (str, int, float, bool, list)) or default is None:

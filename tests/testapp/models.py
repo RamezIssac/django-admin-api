@@ -1,6 +1,7 @@
 import datetime
 import uuid
 
+from django.core.validators import FileExtensionValidator
 from django.db import models
 
 
@@ -108,3 +109,20 @@ class Holiday(models.Model):
 
     def __str__(self):
         return self.title
+
+
+class Document(models.Model):
+    """File and image fields on the main form; attachments as an inline."""
+
+    title = models.CharField(max_length=50)
+    file = models.FileField(upload_to="docs/", blank=True)
+    image = models.ImageField(upload_to="images/", blank=True)
+
+    def __str__(self):
+        return self.title
+
+
+class Attachment(models.Model):
+    document = models.ForeignKey(Document, on_delete=models.CASCADE, related_name="attachments")
+    file = models.FileField(upload_to="attachments/", validators=[FileExtensionValidator(["pdf", "txt"])])
+    caption = models.CharField(max_length=50, blank=True)

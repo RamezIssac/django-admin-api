@@ -347,7 +347,8 @@ def process_changeform(self, request, obj, change):
 parse JSON → reject unknown / readonly keys (400)
 → POST data: PATCH = current values (form initial) + payload; POST/PUT = add-form initial + payload
 → "inlines" block → formset POST data (management form, row ids, DELETE)  (§6.3)
-→ post_request = copy(request) with method="POST", POST=data, in-memory message storage
+→ file uploads → FILES (UploadedFile per field, main form and inline rows)  (§6.3)
+→ post_request = copy(request) with method="POST", POST=data, FILES, in-memory message storage
 → with transaction.atomic():
      with admin.create_revision(post_request) if VersionAdmin else nullcontext():
          result = admin.process_changeform(post_request, obj, change)  # or the default
@@ -391,6 +392,21 @@ PATCH /api/v1/store/sales/7/
   formset machinery, as in the HTML admin. `TransactionItemAdmin`'s overrides apply unchanged.
 - erp_framework's `PrepopulatedAdmin` initial-data logic is **not** applied on API writes
   (initial values are a UI concern). → *Decided (round 3).*
+
+**File and image fields** (main form and inline rows, REST and MCP):
+
+- `{"filename": "a.pdf", "content_base64": "..."}` uploads. `writes.Uploads` decodes it into a
+  `SimpleUploadedFile` in the post request's `FILES` before the admin form runs, so the field's own
+  validation applies (`ImageField` checks the image, validators, `required`).
+- Bad base64, a missing or invalid `filename`, or more bytes than `AdminApiSite.max_upload_size`
+  (default 5 MiB) is a field error in the `validation_failed` envelope.
+- `null` posts the `ClearableFileInput` clear checkbox (`<field>-clear`): an optional file is
+  cleared, a required one is kept. Any other value, such as what reads return, keeps the file.
+  Form initial values leave file fields out, so a write that does not name the field keeps it.
+- Reads return `{"name", "url"}` (the storage's url), or `null` when empty.
+- Base64 adds a third: `DATA_UPLOAD_MAX_MEMORY_SIZE` (Django default 2.5 MB) must hold the whole
+  JSON body. A larger body answers `413 payload_too_large` (REST and MCP HTTP).
+- An MCP dry run validates the upload (base64, name, size, the form field) and stores nothing.
 
 ### 6.4 Error envelope
 
@@ -584,7 +600,7 @@ Phase 3:
 
 - slick_reporting reports at `/api/v1/reports/<slug>/` + a `run_report` tool.
 - OAuth 2.1 for remote MCP connectors.
-- File uploads (multipart) on writes; generic inlines on writes; `list_editable` bulk edit.
+- Generic inlines on writes; `list_editable` bulk edit.
 - PyPI distribution name: settled on `django-admin-api-mcp` (`django-admin-api` was taken, and the first alpha shipped as `django-admin-api2`; the import package stays `admin_api`).
 
 ---
@@ -716,7 +732,8 @@ urlpatterns += [path("mcp/", mcp_site.urls)]
 formsets, so readonly fields and `api_` twins apply. Create: required = form-required fields
 **without an initial value** (the API fills those in; given as `default`). Update: PATCH
 semantics; inline rows may carry `pk` and `_delete`. Relations as pk with `x-related-model`;
-decimals as string or number; choices as `enum`; file fields omitted. Also on `/schema/` as
+decimals as string or number; choices as `enum`; file fields as an object
+`{filename, content_base64}` (§6.3). Also on `/schema/` as
 `input_schema`.
 
 ### 14.5 Streamable HTTP (`/mcp/`)

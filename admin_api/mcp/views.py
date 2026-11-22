@@ -12,11 +12,12 @@ from urllib.parse import urlsplit
 
 from asgiref.sync import async_to_sync
 from django.conf import settings
+from django.core.exceptions import RequestDataTooBig
 from django.http import JsonResponse
 from django.urls import path
 from django.views.decorators.csrf import csrf_exempt
 
-from ..errors import ApiError, PermissionDeniedError
+from ..errors import ApiError, PayloadTooLarge, PermissionDeniedError
 from . import bridge
 from .server import build_server
 from .sites import mcp_enabled
@@ -57,6 +58,10 @@ def make_view(mcp_site):
             return _error(exc, **{"WWW-Authenticate": 'Bearer realm="mcp"'})
         if not mcp_site.api_site.has_permission(request):
             return _error(PermissionDeniedError())
+        try:
+            request.body  # noqa: B018 (read now: over DATA_UPLOAD_MAX_MEMORY_SIZE the SDK gives no JSON error)
+        except RequestDataTooBig:
+            return _error(PayloadTooLarge())
         mcp_site.prepare_request(request)
         # one Server per request: the instructions may depend on the user
         server = build_server(mcp_site, instructions=mcp_site.get_instructions(request))
