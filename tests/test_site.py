@@ -73,6 +73,19 @@ class TestSessionCsrf:
         assert resp.status_code == 403
         assert json.loads(resp.content)["error"] == "csrf_failed" and "help" not in json.loads(resp.content)
 
+    def test_denial_without_mounted_urls_has_no_help(self, rf, superuser):
+        from admin_api import AdminApiSite
+        from admin_api.errors import PermissionDeniedError
+        from tests.testapp.admin import site
+
+        def denied(request):
+            raise PermissionDeniedError()
+
+        request = rf.get("/x")
+        request.user = superuser
+        resp = AdminApiSite(site, name="not_mounted", register_token_admin=False).api_view(denied)(request)
+        assert resp.status_code == 403 and "help" not in json.loads(resp.content)
+
     def test_valid_token_passes(self, rf, superuser):
         resp = self._post_view()(self._request(rf, superuser, token=True))
         assert resp.status_code == 200
