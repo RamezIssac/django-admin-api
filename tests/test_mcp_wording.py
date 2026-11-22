@@ -59,9 +59,16 @@ def clerk(db):
 # --------------------------------------------------------------------------------------------
 def test_default_instructions_ask_for_business_language():
     assert DEFAULT_INSTRUCTIONS.startswith("This server gives you the user's business records and documents.")
-    assert "Talk to the user in business language." in DEFAULT_INSTRUCTIONS
+    assert "Talk to the user in business language" in DEFAULT_INSTRUCTIONS
+    assert "not its 'model' path" in DEFAULT_INSTRUCTIONS
+    assert 'Say "ID" only when the user asks or two records share a label.' in DEFAULT_INSTRUCTIONS
     assert "listing each candidate's label and the kind of record." in DEFAULT_INSTRUCTIONS
+    assert "'ambiguous': ask which one before running anything (not a run per candidate)" in DEFAULT_INSTRUCTIONS
     assert "label and model" not in DEFAULT_INSTRUCTIONS
+
+
+def test_default_instructions_stay_short():
+    assert len(DEFAULT_INSTRUCTIONS) <= 2045
 
 
 def test_get_instructions_hook_answers_initialize(rf, superuser):
@@ -226,3 +233,30 @@ def test_no_language_keeps_the_active_one(call, data):
     with translation.override("de"):
         out, err = call("update_object", args)
     assert err and out["fields"]["value"] == ["Bitte eine Zahl eingeben."]
+
+
+# --------------------------------------------------------------------------------------------
+# search versus filter
+# --------------------------------------------------------------------------------------------
+def test_instruction_six_says_filter_not_search():
+    assert (
+        "Resolve names the user typed with resolve_entities before you filter, report or write." in DEFAULT_INSTRUCTIONS
+    )
+    assert "pass those IDs as describe_model's filter for that kind of record" in DEFAULT_INSTRUCTIONS
+    assert "not as 'search' text, because search does not look into related records" in DEFAULT_INSTRUCTIONS
+    assert "an empty search returns 'searched_fields' and 'id_filters'" in DEFAULT_INSTRUCTIONS
+
+
+def test_empty_search_names_searched_fields_and_id_filters(call, data):
+    out, err = call("list_objects", {"model": "testapp.sales", "search": "Ahmed"})
+    assert not err and out["count"] == 0
+    assert out["searched_fields"] == ["slug"]
+    assert out["id_filters"] == ["client__id__exact"]
+    assert "resolve_entities" in out["hint"]
+    out, err = call("list_objects", {"model": "testapp.sales", "filters": {"client__id__exact": data["client"].pk}})
+    assert not err and out["count"] == 1
+
+
+def test_search_with_rows_has_no_hint(call, data):
+    out, err = call("list_objects", {"model": "testapp.sales", "search": "S-1"})
+    assert not err and out["count"] == 1 and "searched_fields" not in out

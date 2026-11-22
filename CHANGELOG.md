@@ -6,9 +6,10 @@
   labels across every model the user can see. Each term returns an `objects` and a `models` list,
   each with `status` `unique`, `ambiguous` or `none` and ranked candidates (`match`, `confidence`,
   `matched_field`, `label` as `str(obj)`). Terms take `kind` (`any`, `objects`, `models`),
-  `models`, and `for_field` (a create/update relation field or `inlines.<prefix>.<field>`, with the
+  `models` (a top-level `models` is the default for terms without their own), and `for_field` (a create/update relation field or `inlines.<prefix>.<field>`, with the
   field's `limit_choices_to`). Candidates come from each admin's `get_search_results` over its
   `get_queryset(request)`, with its permissions, token scopes and live search fields.
+  The `objects` list names `searched_models` only when its status is `none` or with `verbose=true`.
 - `AdminMcpSite.excluded_models` (and the `excluded_models=` argument): app labels or
   `app_label.model_name` that `resolve_entities` never searches. Default: `auth`, `sessions`,
   `contenttypes`, `admin`, `admin_api`.
@@ -20,7 +21,15 @@
 - **MCP answers in business wording.** The default instructions open with "This server gives you
   the user's business records and documents" and gain a paragraph asking the agent to name kinds
   of records by `name` / `name_plural`, records by their label, and to say "ID" only when needed.
-  Line 6 now asks to list each ambiguous candidate's label and the kind of record.
+  Line 6 now asks to list each ambiguous candidate's label and the kind of record, and to pass
+  resolved IDs as describe_model's filter for that kind of record (e.g. `client`), not as `search`
+  text.
+- The default MCP instructions are 2,035 characters (were 2,540 after the lines above), same rules.
+  An `ambiguous` resolve now says to ask which one before running anything, not to run once per
+  candidate.
+- MCP `list_objects` with a `search` that finds nothing adds `searched_fields` (the admin's search
+  fields), `id_filters` (the `list_filter` parameters that take a related record's ID, e.g.
+  `client__id__exact`) and a `hint`.
 - **MCP keys are `id` and `label`** (REST unchanged): object heads, inline rows, related records
   (`{"id", "label"}`), `list_objects` `columns[0]`, write results, delete previews, view results;
   `describe_model` `pk_field` is now `id_field`. `list_models` items start with `name`. The tool

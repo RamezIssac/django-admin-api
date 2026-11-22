@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import copy
 
+from django.contrib.admin.utils import NotRelationField, get_fields_from_path
 from django.contrib.admin.views.main import ORDER_VAR, PAGE_VAR, SEARCH_VAR
+from django.core.exceptions import FieldDoesNotExist
 from django.db import router, transaction
 from django.http import QueryDict
 from django.utils.translation import gettext, gettext_noop
@@ -19,7 +21,7 @@ from ..errors import InvalidArguments, NotFound, PermissionDeniedError
 from ..nested import ModelPath
 from ..writes import ValidationFailed
 from . import confirm
-from .resolve import MAX_LIMIT, MAX_TERMS, resolve_entities
+from .resolve import DEFAULT_LIMIT, MAX_LIMIT, MAX_TERMS, resolve_entities
 from .tools import (
     ANY_OBJECT,
     CONFIRM_TOKEN_ARG,
@@ -178,6 +180,34 @@ def _ordering_param(model_admin, request, ordering) -> str:
             raise InvalidArguments(f"Cannot order by {name!r}. Sortable columns: {', '.join(sortable) or 'none'}.")
         parts.append(f"{'-' if desc else ''}{column['order_index']}")
     return ".".join(parts)
+
+
+def _id_filters(model_admin, request) -> list:
+    """The changelist parameters that take a related record's ID, as Django's RelatedFieldListFilter names them."""
+    out = []
+    for entry in model_admin.get_list_filter(request):
+        path = entry[0] if isinstance(entry, (list, tuple)) else entry
+        if not isinstance(path, str):
+            continue  # a SimpleListFilter class
+        try:
+            field = get_fields_from_path(model_admin.model, path)[-1]
+        except (FieldDoesNotExist, NotRelationField):
+            continue
+        if field.is_relation and getattr(field, "target_field", None) is not None:
+            out.append(f"{path}__{field.target_field.name}__exact")
+    return out
+
+
+def _empty_search_hint(model_admin, request) -> dict:
+    """For a search that found nothing: the fields it looked at and the filters that take a related record's ID."""
+    return {
+        "searched_fields": list(model_admin.get_search_fields(request) or ()),
+        "id_filters": _id_filters(model_admin, request),
+        "hint": gettext(
+            "Nothing matched the search text in these fields. To find records of a related record, "
+            "resolve it with resolve_entities and pass its ID to one of these filters."
+        ),
+    }
 
 
 def _ensure_writable(site):
@@ -427,6 +457,8 @@ def list_objects(site, request, args) -> dict:
         head["parents"] = request.admin_api_target.parents
     data["columns"] = ["id", *data["columns"][1:]]
     data["rows"] = mcp_keys(data["rows"])
+    if search and data["count"] == 0:
+        data.update(_empty_search_hint(model_admin, request))
     return {**head, **data}
 
 
@@ -566,6 +598,7 @@ TOOLS = [
         name="list_objects",
         title="List objects",
         description="List objects the way the admin changelist does: filters, search, ordering and paging. "
+        "A search that finds nothing returns the fields it searched and the filters that take a related ID. "
         "Returns columnar data: 'columns' names each position in every 'rows' entry; the first is the record 'id', "
         "and a related record is {'id', 'label'}.",
         input_schema=obj(
@@ -631,7 +664,17 @@ TOOLS = [
                         ["text"],
                     ),
                 },
-                "limit": {"type": "integer", "minimum": 1, "maximum": MAX_LIMIT, "default": 5},
+                "models": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Default 'models' for every term without its own 'models' or 'for_field'.",
+                },
+                "limit": {"type": "integer", "minimum": 1, "maximum": MAX_LIMIT, "default": DEFAULT_LIMIT},
+                "verbose": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Also list the models searched when objects were found ('none' always lists them).",
+                },
             },
             ["terms"],
         ),

@@ -152,7 +152,9 @@ their verbose `name`, records by their `label`, "ID" only when needed. The tools
 way: records carry `id` and `label` (REST keeps `pk` and `str`), related records are
 `{"id", "label"}`, and messages use verbose names (`"No sales with ID 9."`, `"You may not change
 this sales."`, `"This kind of record is not available here."`). The arguments `pk` and `pks` are
-still accepted as aliases of `id` and `ids` for one release.
+still accepted as aliases of `id` and `ids` for one release. A `list_objects` search that finds
+nothing returns `searched_fields`, `id_filters` (e.g. `client__id__exact`) and a `hint` to filter
+by a resolved ID.
 
 ### Per-user memory: audience and language
 
@@ -193,8 +195,11 @@ writes. Each term returns two lists, `objects` and `models` ("clients" names a m
 {"terms": [{"text": "ahmed", "for_field": {"model": "store.payment", "field": "client"}},
            {"text": "S-1", "models": ["store.sales"]},
            {"text": "invoices", "kind": "models"}],
+ "models": ["store.client"],
  "limit": 5}
 ```
+
+A top-level `models` applies to every term without its own `models` or `for_field`.
 
 - Objects come from each admin's own `get_search_results` over its `get_queryset(request)`, with
   its live `get_search_fields(request)`; models must be MCP-exposed, viewable by the user and
