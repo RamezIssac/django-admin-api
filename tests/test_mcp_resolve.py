@@ -278,3 +278,23 @@ def test_to_many_search_field_returns_each_object_once(resolve, data):
         ("Ahmed Ali", "exact_code", "sales__slug")
     ]
     assert out["objects"]["status"] == "unique"
+
+
+def test_top_level_models_is_the_default_for_each_term(resolve, data, mcp):
+    first, own, field, models_only = resolve(
+        "alpha",
+        {"text": "alpha", "models": ["testapp.sales"]},
+        {"text": "s-1", "for_field": {"model": "testapp.payment", "field": "inlines.lines.sales"}},
+        {"text": "sales", "kind": "models"},
+        models=["testapp.client"],
+        verbose=True,
+    )
+    assert first["objects"]["searched_models"] == ["testapp.client"]
+    assert first["objects"]["status"] == "unique"
+    assert "models" not in first
+    assert own["objects"]["searched_models"] == ["testapp.sales"]
+    assert field["objects"]["searched_models"] == ["testapp.sales"]
+    assert models_only["models"]["status"] == "unique"
+    schema = mcp.get_tool("resolve_entities").input_schema
+    assert schema["properties"]["models"]["type"] == "array"
+    assert resolve("alpha", models="testapp.client")["error"] == "invalid_arguments"

@@ -6,7 +6,7 @@
   labels across every model the user can see. Each term returns an `objects` and a `models` list,
   each with `status` `unique`, `ambiguous` or `none` and ranked candidates (`match`, `confidence`,
   `matched_field`, `label` as `str(obj)`). Terms take `kind` (`any`, `objects`, `models`),
-  `models`, and `for_field` (a create/update relation field or `inlines.<prefix>.<field>`, with the
+  `models` (a top-level `models` is the default for terms without their own), and `for_field` (a create/update relation field or `inlines.<prefix>.<field>`, with the
   field's `limit_choices_to`). Candidates come from each admin's `get_search_results` over its
   `get_queryset(request)`, with its permissions, token scopes and live search fields.
   The `objects` list names `searched_models` only when its status is `none` or with `verbose=true`.
