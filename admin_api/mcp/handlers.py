@@ -415,7 +415,7 @@ def describe_model(site, request, args) -> dict:
         out["input_schema"] = {"create": None, "update": None}
     else:
         out["actions"] = schema["actions"]
-        out["input_schema"] = input_schemas(model_admin, request, instance)
+        out["input_schema"] = input_schemas(model_admin, request, instance, row_id="id")
     views = _views(site, request, model_admin)
     if instance is not None:
         views = [

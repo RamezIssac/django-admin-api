@@ -199,8 +199,9 @@ class LiveEntityBackend:
     def __init__(self, site):
         self.site = site
 
-    def search_objects(self, request, term: str, targets: list[Target]) -> tuple[list[Hit], bool]:
-        """All scored hits, best first, and whether a model had more rows than were scanned."""
+    def search_objects(self, request, term: str, targets: list[Target], limit=None) -> tuple[list[Hit], bool]:
+        """All scored hits, best first, and whether a model had more rows than were scanned. A
+        backend may return only the best ``limit + 1``; this one ignores ``limit``."""
         hits, capped = [], False
         for target in targets:
             found, more = self._search_target(request, term, target)
@@ -237,7 +238,7 @@ class LiveEntityBackend:
                         hit.match, hit.confidence, hit.matched_field = match, CONFIDENCE[match], path
         return list(best.values()), capped
 
-    def search_models(self, request, term: str, targets: list[Target]) -> list[Hit]:
+    def search_models(self, request, term: str, targets: list[Target], limit=None) -> list[Hit]:
         """Models whose verbose name, plural or model name matches, in each language."""
         wanted, languages, hits = normalize(term), _languages(), []
         for target in targets:
@@ -301,7 +302,7 @@ def _object_candidates(hits: list[Hit]) -> list[dict]:
 
 
 def _resolve_objects(backend, request, term: str, targets: list[Target], limit: int, verbose: bool) -> dict:
-    hits, capped = backend.search_objects(request, term, targets)
+    hits, capped = backend.search_objects(request, term, targets, limit=limit)
     status = list_status(hits)
     out = {"status": status, "more": capped or len(hits) > limit, "candidates": _object_candidates(hits[:limit])}
     if verbose or status == "none":
@@ -310,7 +311,7 @@ def _resolve_objects(backend, request, term: str, targets: list[Target], limit: 
 
 
 def _resolve_models(backend, request, term: str, targets: list[Target], limit: int) -> dict:
-    hits = backend.search_models(request, term, targets)
+    hits = backend.search_models(request, term, targets, limit=limit)
     return {
         "status": list_status(hits),
         "more": len(hits) > limit,

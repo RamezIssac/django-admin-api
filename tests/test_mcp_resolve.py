@@ -36,6 +36,10 @@ site.register(Group, GroupAdmin)
 api_site = AdminApiSite(site, name="resolve_api")
 
 
+class LiveMcpSite(AdminMcpSite):
+    entity_backend_class = LiveEntityBackend  # the search backend: tests/test_search_resolve.py
+
+
 class ClientSearchAdmin(admin.ModelAdmin):
     search_fields = ["^name", "notes__iexact"]
 
@@ -74,7 +78,7 @@ twins_api_site = AdminApiSite(twins_site, name="resolve_twins_api")
 
 @pytest.fixture
 def mcp():
-    return AdminMcpSite(api_site)
+    return LiveMcpSite(api_site)
 
 
 @pytest.fixture
@@ -208,9 +212,9 @@ def test_excluded_models(resolve, data):
     # auth is excluded by default although its admin is exposed
     assert resolve({"text": "root", "kind": "objects"})["objects"]["status"] == "none"
     assert resolve("users")["models"]["status"] == "none"
-    open_site = AdminMcpSite(api_site, excluded_models=())
+    open_site = LiveMcpSite(api_site, excluded_models=())
     assert resolve({"text": "root", "kind": "objects"}, site=open_site)["objects"]["candidates"][0]["label"] == "root"
-    no_sales = AdminMcpSite(api_site, excluded_models=("auth", "testapp.sales"))
+    no_sales = LiveMcpSite(api_site, excluded_models=("auth", "testapp.sales"))
     assert resolve("alpha", site=no_sales, verbose=True)["objects"]["searched_models"] == ["testapp.client"]
 
 
@@ -331,7 +335,7 @@ def test_to_many_search_field_returns_each_object_once(resolve, data):
     by_sales = admin.AdminSite(name="resolve_by_sales")
     by_sales.register(Client, ClientBySales)
     Sales.objects.create(slug="S-10", client=data["clients"]["Ahmed Ali"])
-    out = resolve("S-1", site=AdminMcpSite(AdminApiSite(by_sales, name="resolve_by_sales_api")))
+    out = resolve("S-1", site=LiveMcpSite(AdminApiSite(by_sales, name="resolve_by_sales_api")))
     assert [(c["label"], c["match"], c["matched_field"]) for c in out["objects"]["candidates"]] == [
         ("Ahmed Ali", "exact_code", "sales__slug")
     ]
@@ -416,7 +420,7 @@ def test_for_field_error_messages(resolve, data):
     assert detail("inlines.nope.sales") == "No inline 'nope' on testapp.payment. Inlines: lines."
     assert detail("inlines.nope.x", model="testapp.client") == "No inline 'nope' on testapp.client. Inlines: none."
     assert detail("client", model="testapp.nope") == "This kind of record is not available here."
-    no_clients = AdminMcpSite(api_site, excluded_models=("auth", "testapp.client"))
+    no_clients = LiveMcpSite(api_site, excluded_models=("auth", "testapp.client"))
     assert detail("client", site=no_clients) == "This kind of record is not available here."
 
 
@@ -431,14 +435,14 @@ def test_for_field_reads_the_add_form(resolve, data):
 def test_for_field_to_field_name_gives_the_id(resolve, data):
     Sales.objects.filter(slug="S-1").update(value=Decimal("12.50"))
     field = {"model": "testapp.payment", "field": "sales"}
-    out = resolve({"text": "S-1", "for_field": field}, site=AdminMcpSite(custom_api_site))
+    out = resolve({"text": "S-1", "for_field": field}, site=LiveMcpSite(custom_api_site))
     assert ids(out["objects"]) == [("testapp.sales", "12.50")]
 
 
 def test_search_field_prefixes_and_lookups(resolve, data):
     Client.objects.create(name="Zed", notes="zed")
     Client.objects.create(name="Yan", notes="VIP")
-    mcp = AdminMcpSite(custom_api_site)
+    mcp = LiveMcpSite(custom_api_site)
     zed = resolve({"text": "zed", "models": ["testapp.client"]}, site=mcp)["objects"]["candidates"]
     assert [(c["label"], c["match"], c["matched_field"]) for c in zed] == [("Zed", "exact", "name")]
     vip = resolve({"text": "vip", "models": ["testapp.client"]}, site=mcp)["objects"]["candidates"]
@@ -450,7 +454,7 @@ def test_scan_limit_caps_and_keeps_exact_matches(resolve, data, monkeypatch):
     monkeypatch.setattr(LiveEntityBackend, "scan_limit", 2)
     for name in ("Zara", "Zarab", "Zarac", "Zarabb"):
         Client.objects.create(name=name)
-    mcp = AdminMcpSite(custom_api_site)
+    mcp = LiveMcpSite(custom_api_site)
     out = resolve({"text": "zara", "models": ["testapp.client"]}, site=mcp, limit=20)["objects"]
     assert [(c["label"], c["match"]) for c in out["candidates"]] == [
         ("Zara", "exact"),
@@ -465,7 +469,7 @@ def test_scan_limit_caps_and_keeps_exact_matches(resolve, data, monkeypatch):
 def test_api_twins_drive_search_fields_and_ordering(resolve, data):
     Sales.objects.create(slug="S-3", client=data["clients"]["Alpha"])
     Sales.objects.create(slug="S-2", client=data["clients"]["Alpha"])
-    out = resolve("s-", site=AdminMcpSite(twins_api_site), verbose=True)["objects"]
+    out = resolve("s-", site=LiveMcpSite(twins_api_site), verbose=True)["objects"]
     assert out["searched_models"] == ["testapp.sales"]
     assert [c["label"] for c in out["candidates"]] == ["S-3", "S-2", "S-1"]
 
@@ -475,21 +479,23 @@ class _RecordingBackend(LiveEntityBackend):
 
     def __init__(self, site):
         super().__init__(site)
-        self.requests = []
+        self.requests, self.limits = [], []
 
-    def search_objects(self, request, term, targets):
+    def search_objects(self, request, term, targets, **kwargs):
         self.requests.append(request)
-        hits, capped = super().search_objects(request, term, targets)
+        self.limits.append(kwargs.get("limit"))
+        hits, capped = super().search_objects(request, term, targets, **kwargs)
         sales = next(t for t in targets if t.label == "testapp.sales")
         return [Hit(sales, Sales.objects.get(slug="HIDDEN").pk), *hits], capped
 
-    def search_models(self, request, term, targets):
+    def search_models(self, request, term, targets, **kwargs):
         self.requests.append(request)
-        return super().search_models(request, term, targets)
+        self.limits.append(kwargs.get("limit"))
+        return super().search_models(request, term, targets, **kwargs)
 
 
 def test_entity_backend_seam(rf, superuser, data):
-    mcp = AdminMcpSite(api_site)
+    mcp = LiveMcpSite(api_site)
     mcp.entity_backend_class = _RecordingBackend
     assert mcp.get_entity_backend().site is mcp
     backends = []
@@ -499,6 +505,7 @@ def test_entity_backend_seam(rf, superuser, data):
     out = mcp.call_tool(request, "resolve_entities", {"terms": [{"text": "s-1"}]}).data["results"][0]
     assert ids(out["objects"]) == [("testapp.sales", data["sales"]["S-1"].pk)]
     assert len(backends[0].requests) == 2 and all(r is request for r in backends[0].requests)
+    assert backends[0].limits == [5, 5]
 
 
 def test_models_ranked_best_first(resolve, data):
@@ -511,7 +518,7 @@ def test_models_ranked_best_first(resolve, data):
 
 
 def test_models_match_translated_names(resolve, data, settings):
-    open_site = AdminMcpSite(api_site, excluded_models=())
+    open_site = LiveMcpSite(api_site, excluded_models=())
     settings.LANGUAGES = [("en", "English"), ("de", "German")]
     out = resolve({"text": "gruppe", "kind": "models"}, site=open_site)["models"]
     assert out["candidates"] == [
@@ -520,7 +527,7 @@ def test_models_match_translated_names(resolve, data, settings):
 
 
 def test_models_use_the_active_language(resolve, data):
-    open_site = AdminMcpSite(api_site, excluded_models=())
+    open_site = LiveMcpSite(api_site, excluded_models=())
     with translation.override("de"):
         out = resolve({"text": "benutzer", "kind": "models"}, site=open_site)["models"]
     assert [(c["model"], c["language"]) for c in out["candidates"]] == [("auth.user", "de")]
