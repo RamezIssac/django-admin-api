@@ -658,7 +658,7 @@ urlpatterns += [path("mcp/", mcp_site.urls)]
 | `create_object` | `model`, `data`, `dry_run` | `services.create` |
 | `update_object` | `model`, `id`, `data`, `dry_run` | `services.update(partial=True)` |
 | `delete_object` | `model`, `id`, `confirm` | preview unless `confirm` |
-| `run_action` | `model`, `action`, `ids[]` or `all` + `filters{}` | `services.run_action` (no dry run) |
+| `run_action` | `model`, `action`, `ids[]` or `all` + `filters{}`, `confirm` | `services.run_action` (no dry run; `delete_selected` without `confirm` returns `deletion.deletion_summary` of the selection) |
 | `run_view` | `model`, `view`, `id?`, `params{}`, `dry_run` | `services.run_view` (§16) |
 | *view tools* | `id?`, the view's params, `dry_run?` | views with `mcp_tool=` (§16) |
 
@@ -689,10 +689,16 @@ urlpatterns += [path("mcp/", mcp_site.urls)]
   admin overrides to return another attribute, e.g.
   `def get_mcp_description(self, request): return self.description`.
 - `request.is_mcp` (MCP requests are also `is_api`, so all `api_` twins apply).
-- `request.is_dry_run`: during a dry run the whole pipeline runs (hooks, signals, `LogEntry`,
-  reversion) inside `atomic()` and is rolled back; `transaction.on_commit` callbacks are
-  discarded. **Non-DB side effects in hooks still happen**: put them in `on_commit`, or skip
-  them when `request.is_dry_run`.
+- **Dry runs validate only** (0.1.0a4). `services.create/update(dry_run=True)` run the permission
+  checks and `get_object` (the admin's queryset), build the POST data and call the admin's
+  `validate_changeform(request, obj, change)` when it defines one, else
+  `writes.validate_changeform`: `get_form`, `_create_formsets`, `form.is_valid()`, `all_valid`.
+  No `save_form`, `save_model`, `save_related`, `log_*` or custom `process_changeform` runs:
+  no signals, side effects or writes. `request.is_dry_run` is `True` during the
+  validation. A write view's dry run runs `view_object`, the permission checks and `clean_params`
+  and does not call the view; invalid params give `valid: false`. Results:
+  `{"dry_run", "valid", "errors" | "note"}` plus `confirm_token` when gated; `object` and
+  `totals` come with the real write.
 - `ApiRequestMiddleware` sets `is_api`, `is_mcp` and `is_dry_run` to `False` on every request.
 - `AdminMcpSite.get_instructions(request)` is sent at `initialize`; the HTTP view builds one SDK
   `Server` per request, stdio asks once at start. Default: `instructions` plus the user's
@@ -737,7 +743,7 @@ Three generic additions to the create/update/dry-run path. None is specific to o
 `api_detail_fields` entries. A write result carries them as `totals` next to `object` (REST:
 `totals` inside the object, like `messages`). `services._saved` reloads the object through the
 admin's queryset after the save, inside the transaction, so values written by signals or
-`QuerySet.update()` show up in `object` and `totals`, in a dry run too.
+`QuerySet.update()` show up in `object` and `totals`.
 
 **`require_dry_run`.** `AdminMcpSite(api_site, require_dry_run=True)` (default `False`); an admin
 overrides it with `mcp_require_dry_run = True | False`. The gate covers `create_object`,
@@ -749,8 +755,10 @@ or the object changed).
 - The token is a `TimestampSigner` signature (salt `admin_api.mcp.confirm.<site name>`) over a
   random `jti`, stored in `McpConfirmation` (0.1.0a3) with a SHA-256 fingerprint of the user pk,
   the API token pk, the operation, the model path, the parents, the exact `data` / `pk` /
-  `params` and the object's stored row (all concrete fields, read fresh; inline rows are not
-  included). Valid for `AdminMcpSite.confirm_token_max_age` seconds (900).
+  `params`, the object's stored row (all concrete fields, read fresh; inline rows are not
+  included) and the admin's `get_mcp_confirm_state(request, obj)` (default `None`; `obj` is `None`
+  for a create). The hook pins state stored outside the row, such as the last row of a status
+  log, and returns plain values. Valid for `AdminMcpSite.confirm_token_max_age` seconds (900).
 - Single use: the real write spends the row with one conditional `UPDATE` (`jti`, fingerprint,
   `used_at IS NULL`); a replay or a concurrent second call matches no row. A call that does not
   match leaves the token unspent. The real write reads the object's row `FOR UPDATE`, spends the
@@ -759,8 +767,8 @@ or the object changed).
 - 404 and 403 come before the 409: the handlers load the object and run the write's permission
   and scope checks (`services.check_add_permission` / `check_change_permission`,
   `custom_views.check_view_permission`) before `confirm.verify`.
-- An invalid dry run returns no token. `delete_object` (has `confirm`), `run_action` (no dry run)
-  and read tools are not gated.
+- An invalid dry run returns no token. `delete_object` and `run_action`'s `delete_selected` (both
+  have `confirm`), other actions (no dry run) and read tools are not gated.
 
 **Audit log.** `AdminMcpSite.call_tool` logs one INFO record per call to `admin_api.mcp.audit`
 (`extra={"mcp_audit": {...}}`): tool, user pk, token prefix, `REMOTE_ADDR`, model, pk, view,

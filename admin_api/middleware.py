@@ -3,9 +3,9 @@ class ApiRequestMiddleware:
     every request.
 
     API views flip ``is_api`` to ``True``; MCP requests set ``is_api`` and ``is_mcp``; MCP
-    ``dry_run`` writes set ``is_dry_run`` (the write is rolled back afterwards, so hooks can
-    skip side effects such as e-mails). With this middleware installed, admin code can use
-    these flags directly (no ``getattr``). Enforced by system check ``admin_api.E001``.
+    ``dry_run`` writes set ``is_dry_run`` while the admin's validation runs (nothing is saved).
+    With this middleware installed, admin code can use these flags directly (no ``getattr``).
+    Enforced by system check ``admin_api.E001``.
     """
 
     def __init__(self, get_response):

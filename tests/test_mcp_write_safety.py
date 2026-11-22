@@ -7,9 +7,10 @@ import pytest
 from django.contrib.admin.models import LogEntry
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
+from django.core import mail
 from django.db.models.signals import post_delete, post_save
 
-from admin_api.mcp import AdminMcpSite
+from admin_api.mcp import AdminMcpSite, confirm
 from admin_api.models import ApiToken
 from tests.testapp import totals_admin
 from tests.testapp.models import Client, Sales, SalesItem
@@ -64,11 +65,12 @@ def test_create_returns_totals_written_by_signals(call, ahmed):
 
 
 @pytest.mark.usefixtures("header_signal")
-def test_dry_run_returns_totals_and_saves_nothing(call, ahmed):
+def test_dry_run_leaves_totals_to_the_real_write(call, ahmed):
     out, err = call(totals_admin.totals_mcp, "create_object", create_args(ahmed, dry_run=True))
-    assert not err and out["valid"] is True
-    assert out["totals"] == {"value": "30.00", "line_count": 2}
+    assert not err and out["valid"] is True and "totals" not in out
     assert not Sales.objects.exists()
+    out, err = call(totals_admin.totals_mcp, "create_object", create_args(ahmed))
+    assert not err and out["totals"] == {"value": "30.00", "line_count": 2}
 
 
 @pytest.mark.usefixtures("header_signal")
@@ -182,6 +184,70 @@ def test_view_token_is_bound_to_the_object_state(call, gated, ahmed):
     assert err and out["error"] == "invalid_confirm_token"
     sale.refresh_from_db()
     assert sale.status == "draft"
+
+
+@pytest.fixture
+def item_log(monkeypatch):
+    """The admin pins a sale's items, state stored outside the sale's own row."""
+    seen = []
+
+    def get_mcp_confirm_state(self, request, obj):
+        seen.append(obj)
+        return sorted(obj.items.values_list("pk", flat=True)) if obj else None
+
+    sales_admin = api_site.get_model_admin("testapp", "sales")
+    monkeypatch.setattr(type(sales_admin), "get_mcp_confirm_state", get_mcp_confirm_state, raising=False)
+    return seen
+
+
+def test_confirm_state_hook_catches_a_change_outside_the_row(call, gated, ahmed, item_log):
+    sale = Sales.objects.create(slug="S-1", client=ahmed)
+    args = {"pk": sale.pk, "note": "x"}
+    dry, _ = call(gated, "post_sale", {**args, "dry_run": True})
+    SalesItem.objects.create(sales=sale, product="Milk")  # a concurrent write to another table
+    out, err = call(gated, "post_sale", {**args, "confirm_token": dry["confirm_token"]})
+    assert err and out["error"] == "invalid_confirm_token" and out["status"] == 409
+    sale.refresh_from_db()
+    assert sale.status == "draft"
+
+
+def test_confirm_state_hook_accepts_an_unchanged_write(call, gated, ahmed, item_log):
+    sale = Sales.objects.create(slug="S-1", client=ahmed)
+    SalesItem.objects.create(sales=sale, product="Milk")
+    args = {"pk": sale.pk, "note": "x"}
+    dry, _ = call(gated, "post_sale", {**args, "dry_run": True})
+    out, err = call(gated, "post_sale", {**args, "confirm_token": dry["confirm_token"]})
+    assert not err, out
+    dry, _ = call(gated, "create_object", create_args(ahmed, dry_run=True))
+    assert not call(gated, "create_object", create_args(ahmed, confirm_token=dry["confirm_token"]))[1]
+    assert item_log[-2:] == [None, None]  # a create passes no object
+
+
+def test_write_state_pins_the_row_and_the_hook_value(rf, superuser, ahmed, item_log):
+    sale = Sales.objects.create(slug="S-1", client=ahmed)
+    item = SalesItem.objects.create(sales=sale, product="Milk")
+    request = rf.post("/mcp/")
+    request.user = superuser
+    state = confirm.write_state(api_site.get_model_admin("testapp", "sales"), request, sale)
+    assert state == {"row": Sales.objects.filter(pk=sale.pk).values().first(), "extra": [item.pk]}
+
+
+def test_confirm_state_hook_gets_the_request(call, gated, ahmed, superuser, monkeypatch):
+    users = []
+
+    def get_mcp_confirm_state(self, request, obj):
+        users.append(request.user.username)
+
+    sales_admin = api_site.get_model_admin("testapp", "sales")
+    monkeypatch.setattr(type(sales_admin), "get_mcp_confirm_state", get_mcp_confirm_state, raising=False)
+    sale = Sales.objects.create(slug="S-1", client=ahmed)
+    view = {"pk": sale.pk, "note": "x"}
+    dry, _ = call(gated, "post_sale", {**view, "dry_run": True})
+    assert not call(gated, "post_sale", {**view, "confirm_token": dry["confirm_token"]})[1]
+    update = {"model": "testapp.sales", "pk": sale.pk, "data": {"value": "3"}}
+    dry, _ = call(gated, "update_object", {**update, "dry_run": True})
+    assert not call(gated, "update_object", {**update, "confirm_token": dry["confirm_token"]})[1]
+    assert users == [superuser.username] * 4
 
 
 def test_token_is_bound_to_the_api_token(call, gated, ahmed, superuser):
@@ -347,6 +413,138 @@ def test_token_flow_over_stateless_http(client, superuser, ahmed, monkeypatch):
 
 
 # --------------------------------------------------------------------------------------------
+# a dry run validates only: no save, no signal, no view call
+# --------------------------------------------------------------------------------------------
+@pytest.fixture
+def mail_on_post():
+    """Mails the client from a post_save signal once a sale is posted."""
+
+    def notify(sender, instance, **kwargs):
+        if instance.status == "posted":
+            mail.send_mail(f"{instance.slug} posted", "", "erp@example.com", ["client@example.com"])
+
+    post_save.connect(notify, sender=Sales, dispatch_uid="mail_on_post")
+    yield
+    post_save.disconnect(sender=Sales, dispatch_uid="mail_on_post")
+
+
+@pytest.fixture
+def mail_on_save_model(monkeypatch):
+    """Mails from the admin's save_model, a side effect outside on_commit."""
+    sales_admin = type(api_site.get_model_admin("testapp", "sales"))
+    save_model = sales_admin.save_model
+
+    def mailing_save_model(self, request, obj, form, change):
+        mail.send_mail(f"{obj.slug} saved", "", "erp@example.com", ["boss@example.com"])
+        save_model(self, request, obj, form, change)
+
+    monkeypatch.setattr(sales_admin, "save_model", mailing_save_model)
+
+
+@pytest.mark.usefixtures("mail_on_post", "mail_on_save_model")
+def test_update_dry_run_runs_no_save_model_and_no_signal(call, ahmed):
+    site = AdminMcpSite(api_site)
+    sale = Sales.objects.create(slug="S-1", client=ahmed)
+    args = {"model": "testapp.sales", "pk": sale.pk, "data": {"status": "posted"}}
+    out, err = call(site, "update_object", {**args, "dry_run": True})
+    assert not err and out == {
+        "dry_run": True,
+        "valid": True,
+        "note": "Valid. Nothing was saved; totals come with the real write.",
+    }
+    assert mail.outbox == [] and not LogEntry.objects.exists()
+    sale.refresh_from_db()
+    assert sale.status == "draft"
+
+    out, err = call(site, "update_object", args)
+    assert not err, out
+    assert [m.subject for m in mail.outbox] == ["S-1 saved", "S-1 posted"]
+
+
+@pytest.mark.usefixtures("mail_on_post")
+def test_view_dry_run_does_not_run_the_view(call, ahmed):
+    site = AdminMcpSite(api_site)
+    sale = Sales.objects.create(slug="S-1", client=ahmed)
+    run_view = {"model": "testapp.sales", "view": "post", "pk": sale.pk, "params": {}, "dry_run": True}
+    out, err = call(site, "run_view", run_view)
+    assert not err and out == {
+        "dry_run": True,
+        "valid": True,
+        "note": "Valid. The view did not run; nothing was saved.",
+    }
+    assert mail.outbox == []
+    sale.refresh_from_db()
+    assert sale.status == "draft"
+
+    out, err = call(site, "run_view", {**run_view, "dry_run": False})
+    assert not err and [m.subject for m in mail.outbox] == ["S-1 posted"]
+
+
+def test_view_dry_run_validates_the_params(call, ahmed):
+    sale = Sales.objects.create(slug="S-1", client=ahmed)
+    args = {"model": "testapp.sales", "view": "post", "pk": sale.pk, "params": {"note": 5}, "dry_run": True}
+    out, err = call(AdminMcpSite(api_site), "run_view", args)
+    assert not err and out == {"dry_run": True, "valid": False, "errors": {"fields": {"note": ["Expected string."]}}}
+
+
+def test_admin_validate_changeform_replaces_the_default_on_a_dry_run(call, ahmed, monkeypatch):
+    from admin_api.writes import validate_changeform
+
+    def whole_document_check(self, request, obj, change):
+        result = validate_changeform(self, request, obj, change)
+        result.form.add_error(None, "The client is on hold.")
+        result.valid = False
+        return result
+
+    monkeypatch.setattr(
+        type(api_site.get_model_admin("testapp", "sales")), "validate_changeform", whole_document_check, raising=False
+    )
+    out, err = call(AdminMcpSite(api_site), "create_object", create_args(ahmed, dry_run=True))
+    assert not err and out["valid"] is False
+    assert out["errors"] == {"non_field_errors": ["The client is on hold."]}
+
+
+def test_dry_run_reports_form_and_inline_errors(call, ahmed):
+    data = {"slug": "X-1", "client": ahmed.pk, "inlines": {"items": [{"product": "Milk", "price": "abc"}]}}
+    out, err = call(AdminMcpSite(api_site), "create_object", {"model": "testapp.sales", "data": data, "dry_run": True})
+    assert not err and out["dry_run"] is True and out["valid"] is False
+    assert out["errors"]["non_field_errors"] == ["Slug must start with S-."]
+    assert out["errors"]["inlines"]["items"]["rows"][0]["errors"] == {"price": ["Enter a number."]}
+    assert not Sales.objects.exists()
+
+
+def test_dry_run_checks_permissions_and_the_admin_queryset(call, ahmed):
+    site = AdminMcpSite(api_site)
+    hidden = Sales.objects.create(slug="HIDDEN", client=ahmed)
+    out, err = call(site, "update_object", {"model": "testapp.sales", "pk": hidden.pk, "data": {}, "dry_run": True})
+    assert err and out["error"] == "not_found"
+    viewer = get_user_model().objects.create_user("viewer", "v@x.io", "pw", is_staff=True)
+    viewer.user_permissions.add(Permission.objects.get(codename="view_sales"))
+    sale = Sales.objects.create(slug="S-1", client=ahmed)
+    args = {"model": "testapp.sales", "pk": sale.pk, "data": {}, "dry_run": True}
+    out, err = call(site, "update_object", args, user=viewer)
+    assert err and out["error"] == "permission_denied"
+
+
+def test_validation_sees_is_dry_run(call, ahmed, monkeypatch):
+    sales_admin = type(api_site.get_model_admin("testapp", "sales"))
+    get_form = sales_admin.get_form
+    seen = []
+
+    def recording_get_form(self, request, *args, **kwargs):
+        seen.append(request.is_dry_run)
+        return get_form(self, request, *args, **kwargs)
+
+    monkeypatch.setattr(sales_admin, "get_form", recording_get_form)
+    request_args = create_args(ahmed, dry_run=True)
+    assert not call(AdminMcpSite(api_site), "create_object", request_args)[1]
+    assert seen and all(seen)
+    seen.clear()
+    assert not call(AdminMcpSite(api_site), "create_object", {**request_args, "dry_run": False})[1]
+    assert seen and not any(seen)
+
+
+# --------------------------------------------------------------------------------------------
 # LogEntry
 # --------------------------------------------------------------------------------------------
 def test_mcp_log_entries_say_via_mcp(call, ahmed):
@@ -369,3 +567,12 @@ def test_rest_log_entries_keep_the_structured_message(client, superuser, ahmed):
     assert resp.status_code == 201
     entry = LogEntry.objects.get(object_id=str(json.loads(resp.content)["pk"]))
     assert json.loads(entry.change_message) == [{"added": {}}]
+
+
+@pytest.mark.parametrize("slug", ["S-9", "X-1"])  # valid and invalid dry runs
+def test_is_dry_run_is_false_again_after_a_dry_run(rf, superuser, ahmed, slug):
+    request = rf.post("/mcp/")
+    request.user = superuser
+    args = {"model": "testapp.sales", "data": {"slug": slug, "client": ahmed.pk}, "dry_run": True}
+    assert not AdminMcpSite(api_site).call_tool(request, "create_object", args).is_error
+    assert request.is_dry_run is False

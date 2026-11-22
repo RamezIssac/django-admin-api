@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import math
+from functools import partial
 
 from django.contrib.admin.utils import NotRelationField, get_fields_from_path
 from django.contrib.admin.views.main import ORDER_VAR, PAGE_VAR, SEARCH_VAR
@@ -219,20 +220,23 @@ def _write_result(data: dict) -> dict:
     return out
 
 
-def _dry_run(model_admin, request, fn) -> dict:
-    """Run ``fn`` (a write service) and roll everything back, including on_commit callbacks."""
+def _dry_run(site, request, model_admin, check, note: str, operation: str, scope: dict, obj) -> dict:
+    """``check()`` (validation only) with ``request.is_dry_run`` set. With ``require_dry_run``, a valid
+    dry run issues the ``confirm_token`` the real write must present."""
     request.is_dry_run = True
     try:
-        with transaction.atomic(using=router.db_for_write(model_admin.model)):
-            try:
-                out = {"dry_run": True, "valid": True, **_write_result(fn())}
-            except ValidationFailed as exc:
-                out = {"dry_run": True, "valid": False, "errors": mcp_keys(exc.extra)}
-            transaction.set_rollback(True)
+        check()
+    except (ValidationFailed, custom_views.InvalidParams) as exc:
+        return {"dry_run": True, "valid": False, "errors": mcp_keys(exc.extra)}
     finally:
         request.is_dry_run = False
-    if out["valid"]:
-        out["note"] = gettext("Nothing was saved; the ID shown is provisional.")
+    out = {"dry_run": True, "valid": True, "note": note}
+    if site.requires_dry_run(model_admin):
+        state = confirm.write_state(model_admin, request, obj)
+        out["confirm_token"] = confirm.issue(site, request, operation, scope, state)
+        out["note"] = gettext(
+            "Valid. Nothing was saved. To save, repeat the call without dry_run and pass this confirm_token."
+        )
     return out
 
 
@@ -242,32 +246,22 @@ def _write_scope(request, **arguments) -> dict:
     return {"model": target.path.label, "parents": target.parents, **arguments}
 
 
-def _issue_confirm_token(site, request, out: dict, operation: str, scope: dict, state) -> dict:
-    out["confirm_token"] = confirm.issue(site, request, operation, scope, state)
-    out["note"] = gettext(
-        "Nothing was saved; the ID shown is provisional. To save, repeat the call without dry_run "
-        "and pass this confirm_token."
-    )
-    return out
-
-
 def _confirmed_write(site, request, model_admin, token, operation: str, scope: dict, obj, run):
     """A gated real write: lock the object's row, spend ``token`` and write in one transaction. A
     failed write rolls the token back to unspent."""
     with transaction.atomic(using=router.db_for_write(model_admin.model)):
-        confirm.verify(site, token, request, operation, scope, confirm.object_state(obj, lock=True))
+        state = confirm.write_state(model_admin, request, obj, lock=True)
+        confirm.verify(site, token, request, operation, scope, state)
         return run()
 
 
 def _guarded_write(site, request, model_admin, args, run, operation: str, scope: dict, obj=None) -> dict:
-    """A create/update of ``obj`` (``None`` for a create), its permissions already checked: with
-    ``require_dry_run``, a valid dry run issues the ``confirm_token`` that the real write must present."""
-    gated = site.requires_dry_run(model_admin)
+    """A create/update of ``obj`` (``None`` for a create), its permissions already checked. ``run`` is
+    the write service; ``run(dry_run=True)`` validates only."""
     if _arg(args, "dry_run", bool, required=False, default=False):
-        state = confirm.object_state(obj) if gated else None
-        out = _dry_run(model_admin, request, run)
-        return _issue_confirm_token(site, request, out, operation, scope, state) if gated and out["valid"] else out
-    if gated:
+        note = gettext("Valid. Nothing was saved; totals come with the real write.")
+        return _dry_run(site, request, model_admin, partial(run, dry_run=True), note, operation, scope, obj)
+    if site.requires_dry_run(model_admin):
         token = args.get("confirm_token")
         return _write_result(_confirmed_write(site, request, model_admin, token, operation, scope, obj, run))
     return _write_result(run())
@@ -324,16 +318,10 @@ def execute_view(site, request, model_admin, name, *, pk=None, params=None, dry_
             return _confirmed_write(site, request, model_admin, confirm_token, "run_view", scope, obj, run)
         return run()
     if not spec.writes:
-        return {**run(), "dry_run": True, "note": gettext("A read-only view; nothing to roll back.")}
-    state = confirm.object_state(obj) if gated else None
-    request.is_dry_run = True
-    try:
-        with transaction.atomic(using=router.db_for_write(model_admin.model)):
-            out = {**run(), "dry_run": True, "note": gettext("Nothing was saved: the view ran and was rolled back.")}
-            transaction.set_rollback(True)
-    finally:
-        request.is_dry_run = False
-    return _issue_confirm_token(site, request, out, "run_view", scope, state) if gated else out
+        return {**run(), "dry_run": True, "note": gettext("A read-only view; it ran and changed nothing.")}
+    check = partial(custom_views.clean_params, spec, request, params or {})
+    note = gettext("Valid. The view did not run; nothing was saved.")
+    return _dry_run(site, request, model_admin, check, note, "run_view", scope, obj)
 
 
 # --------------------------------------------------------------------------------------------
@@ -489,7 +477,7 @@ def create_object(site, request, args) -> dict:
         request,
         model_admin,
         args,
-        lambda: services.create(model_admin, request, data),
+        partial(services.create, model_admin, request, data),
         "create_object",
         _write_scope(request, data=data),
     )
@@ -507,11 +495,15 @@ def update_object(site, request, args) -> dict:
         request,
         model_admin,
         args,
-        lambda: services.update(model_admin, request, pk, data, partial=True, obj=obj),
+        partial(services.update, model_admin, request, pk, data, partial=True, obj=obj),
         "update_object",
         _write_scope(request, pk=str(pk), data=data),
         obj,
     )
+
+
+def _not_deleted_note() -> str:
+    return gettext("Nothing was deleted. Call again with confirm=true to delete.")
 
 
 def delete_object(site, request, args) -> dict:
@@ -524,7 +516,7 @@ def delete_object(site, request, args) -> dict:
             "deleted": False,
             "confirm_required": True,
             "preview": mcp_keys(preview),
-            "note": gettext("Nothing was deleted. Call again with confirm=true to delete."),
+            "note": _not_deleted_note(),
         }
     return {"deleted": True, "object": mcp_keys(services.delete(model_admin, request, pk)["deleted"])}
 
@@ -538,7 +530,10 @@ def run_action(site, request, args) -> dict:
         payload["all"] = True
     else:
         payload["pks"] = _arg({"ids": args.get("ids", args.get("pks"))}, "ids", list, required=False, default=[])
-    return mcp_keys(services.run_action(model_admin, _with_query(request, _filters_query(args)), action, payload))
+    confirm = _arg(args, "confirm", bool, required=False, default=False)
+    request = _with_query(request, _filters_query(args))
+    out = mcp_keys(services.run_action(model_admin, request, action, payload, delete_preview=not confirm))
+    return {**out, "confirm_required": True, "note": _not_deleted_note()} if "preview" in out else out
 
 
 def run_view(site, request, args) -> dict:
@@ -748,7 +743,8 @@ TOOLS = [
         name="run_action",
         title="Run an admin action",
         description="Run one of the model's admin actions (listed by describe_model) on the given ids, or on "
-        "all objects matching 'filters' with all=true. Actions have no dry run.",
+        "all objects matching 'filters' with all=true. Actions have no dry run; delete_selected without "
+        "confirm=true returns what would be deleted and deletes nothing.",
         input_schema=obj(
             {
                 "model": MODEL_ARG,
@@ -758,6 +754,11 @@ TOOLS = [
                 "pks": {"type": "array", "items": ID_ARG, "description": "Deprecated alias of 'ids'."},
                 "all": {"type": "boolean", "default": False, "description": "Run on all objects matching filters."},
                 "filters": FILTERS_ARG,
+                "confirm": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "For delete_selected: actually delete.",
+                },
             },
             ["model", "action"],
         ),
@@ -783,7 +784,7 @@ TOOLS = [
                 "params": {"type": "object", "description": "Parameters matching the view's params_schema."},
                 "dry_run": {
                     **DRY_RUN_ARG,
-                    "description": "For views with writes=true: run the view, then roll everything back.",
+                    "description": "For views with writes=true: check permissions and params; the view does not run.",
                 },
                 "confirm_token": CONFIRM_TOKEN_ARG,
             },

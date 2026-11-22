@@ -398,23 +398,28 @@ def check_change_permission(model_admin, request, obj) -> None:
     scopes.check(request, model_admin.opts, "change")
 
 
-def create(model_admin, request, payload) -> dict:
+def create(model_admin, request, payload, *, dry_run=False) -> dict:
+    """``dry_run``: validate only and return ``{}``; raises ``ValidationFailed`` like the real write."""
     from .writes import save_from_payload
 
     check_add_permission(model_admin, request)
-    result, messages = save_from_payload(model_admin, request, None, _load(payload), change=False, partial=False)
-    return _saved(model_admin, request, result, messages)
+    result, messages = save_from_payload(
+        model_admin, request, None, _load(payload), change=False, partial=False, dry_run=dry_run
+    )
+    return {} if dry_run else _saved(model_admin, request, result, messages)
 
 
-def update(model_admin, request, object_id, payload, *, partial: bool, obj=None) -> dict:
-    """``obj``: the object of ``object_id`` when the caller has already loaded it."""
+def update(model_admin, request, object_id, payload, *, partial: bool, obj=None, dry_run=False) -> dict:
+    """``obj``: the object of ``object_id`` when the caller has already loaded it. ``dry_run``: as in :func:`create`."""
     from .writes import save_from_payload
 
     if obj is None:
         obj = get_object(model_admin, request, object_id)
     check_change_permission(model_admin, request, obj)
-    result, messages = save_from_payload(model_admin, request, obj, _load(payload), change=True, partial=partial)
-    return _saved(model_admin, request, result, messages)
+    result, messages = save_from_payload(
+        model_admin, request, obj, _load(payload), change=True, partial=partial, dry_run=dry_run
+    )
+    return {} if dry_run else _saved(model_admin, request, result, messages)
 
 
 def delete(model_admin, request, object_id) -> dict:
@@ -440,9 +445,10 @@ def run_view(model_admin, request, name: str, *, object_id=None, data=None, obj=
     return _run(model_admin, request, name, object_id=object_id, data=data, obj=obj)
 
 
-def run_action(model_admin, request, name: str, payload: dict) -> dict:
+def run_action(model_admin, request, name: str, payload: dict, *, delete_preview=False) -> dict:
     """Run an admin action on ``{"pks": [...]}`` or ``{"all": true}``; with ``all``, the
-    changelist filters in ``request.GET`` narrow the queryset."""
+    changelist filters in ``request.GET`` narrow the queryset. ``delete_preview``:
+    ``delete_selected`` without an ``api_`` twin lists what deleting the selection would remove and deletes nothing."""
     from .actions import run_action as _run
 
-    return _run(model_admin, request, name, payload)
+    return _run(model_admin, request, name, payload, delete_preview=delete_preview)

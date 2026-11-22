@@ -36,8 +36,7 @@
   arguments are `id` and `ids`; `pk` and `pks` stay accepted as aliases for one release. An inline
   row sent with `id` updates that row, and `describe_model`'s update schema names that key `id`.
 - Messages use verbose names and "ID", wrapped in `gettext`: `"No sales with ID 9."`,
-  `"This connection may not change sales."`, `"No view 'x' on sales."`, notes say "the ID shown
-  is provisional". Unknown, hidden and excluded models all answer `"This kind of record is not
+  `"This connection may not change sales."`, `"No view 'x' on sales."`. Unknown, hidden and excluded models all answer `"This kind of record is not
   available here."` (was `No API for app.model` / `No MCP access to app.model`).
 - `import admin_api` works without Django settings: the scope verbs and error default details are
   `gettext_lazy` strings.
@@ -76,6 +75,22 @@
 - MCP `list_objects` pages through at most `AdminMcpSite.list_max_rows` records of a query (default
   1000, `None` for no cap). A larger query reports only the reachable `pages` and adds a `hint`
   pointing at reports, filters and search; a page past the cap answers `invalid_arguments`.
+- **MCP dry runs validate only.** `dry_run=true` on `create_object` / `update_object` runs the
+  permission checks, the admin's queryset and its form and inline validation, and saves nothing:
+  no `save_model`, signal, `LogEntry` or e-mail, no transaction to roll back. A write view's dry
+  run checks permissions and params without calling the view. The result is `dry_run`, `valid`
+  and `errors` or `note`; `object` and `totals` come with the real write only.
+  `writes.validate_changeform` is the validation half of `default_process_changeform`; an admin
+  replaces it for dry runs with its own `validate_changeform(request, obj, change)`.
+- **`get_mcp_confirm_state(request, obj)`** on the admin (default on `ApiAdminMixin`: `None`)
+  adds state stored outside the object's row, such as the last row of a status log, to the
+  `require_dry_run` confirm-token fingerprint. A concurrent change to that state now gets 409
+  `invalid_confirm_token`.
+- **MCP `run_action` with `delete_selected` needs `confirm=true`**, like `delete_object`. Without it
+  the tool returns the selection's `count`, a `preview` (`to_delete`, `model_count`, `perms_needed`,
+  `protected`, `can_delete`) and `confirm_required`, and deletes nothing. REST actions are unchanged.
+- Action descriptions are formatted like the admin's action menu: `delete_selected` reads
+  "Delete selected sales", not "Delete selected %(verbose_name_plural)s".
 
 ## 0.1.0a3 (2026-11-19)
 

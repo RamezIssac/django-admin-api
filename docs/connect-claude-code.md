@@ -139,8 +139,7 @@ Ask in plain words. Claude Code calls the tools and asks you before the first us
 2. "Show the five newest sales." It calls `describe_model` for the filters and columns, then
    `list_objects` and `get_object`.
 3. "Create a client named Zeta. Run it as a dry run first." It calls `create_object` with
-   `dry_run=true`: the whole save pipeline runs (validation, hooks, signals, `totals` when the
-   admin declares `api_totals`), then the transaction is rolled back. Check the result, then
+   `dry_run=true`: the admin's validation runs and nothing is saved. Check the result, then
    say "go ahead" and it repeats the call without `dry_run`.
 
 Note: ask for the dry run in the prompt, or set `AdminMcpSite(api_site, require_dry_run=True)`,
@@ -204,7 +203,7 @@ A read token is scoped to `tracker.*:view`, and a write token adds `tracker.task
 
 - "Which tasks are open in the Billing stream?" runs `describe_model` and `list_objects` with
   the admin's own filters.
-- "Move task 42 to review." runs `update_object` with `dry_run=true`. The result shows the saved
-  document and its `totals`. After the approval, the same call without `dry_run` saves it and
-  the history reads `Changed Status. Via MCP.`
+- "Move task 42 to review." runs `update_object` with `dry_run=true`. The result says whether the
+  change is valid. After the approval, the same call without `dry_run` saves it, returns the
+  document and its `totals`, and the history reads `Changed Status. Via MCP.`
 - With the read token the same request returns 403 `permission_denied`, and nothing changes.

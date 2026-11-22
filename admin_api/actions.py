@@ -17,12 +17,14 @@ returning JSON-serializable data, to expose it.
 from __future__ import annotations
 
 from django.contrib.admin import helpers
+from django.contrib.admin.utils import model_format_dict
 from django.core.exceptions import PermissionDenied
 from django.db import router, transaction
 from django.http import HttpResponseBase, QueryDict
 
 from . import scopes
 from .changelist import build_changelist, get_columns, split_api_params
+from .deletion import deletion_summary
 from .encoders import encode_value
 from .errors import ApiError, NotFound, PermissionDeniedError
 from .writes import InvalidJson, as_post_request
@@ -52,13 +54,20 @@ def api_twin(model_admin, name):
 
 def describe_actions(model_admin, request) -> list[dict]:
     out = []
+    names = model_format_dict(model_admin.opts)
     for action in model_admin.get_actions(request).values():
         _func, name, description = action_parts(action)
-        out.append({"name": name, "description": str(description), "api_twin": api_twin(model_admin, name) is not None})
+        out.append(
+            {
+                "name": name,
+                "description": str(description % names),
+                "api_twin": api_twin(model_admin, name) is not None,
+            }
+        )
     return out
 
 
-def run_action(model_admin, request, name, payload: dict) -> dict:
+def run_action(model_admin, request, name, payload: dict, *, delete_preview: bool) -> dict:
     if not isinstance(payload, dict):
         raise InvalidJson("The action payload must be an object.")
     actions = model_admin.get_actions(request)
@@ -82,6 +91,9 @@ def run_action(model_admin, request, name, payload: dict) -> dict:
     count = queryset.count()
     if not count:
         raise NothingSelected("No objects match the selection.")
+    twin = api_twin(model_admin, name)
+    if delete_preview and name == "delete_selected" and not twin:  # by name: wrappers such as subadmin's keep it
+        return {"action": name, "count": count, "preview": deletion_summary(model_admin, request, queryset)}
 
     data = QueryDict(mutable=True)
     data["action"] = name
@@ -94,7 +106,6 @@ def run_action(model_admin, request, name, payload: dict) -> dict:
     data._mutable = False
     post_request = as_post_request(request, data)
 
-    twin = api_twin(model_admin, name)
     try:
         with transaction.atomic(using=router.db_for_write(model_admin.model)):
             result = twin(post_request, queryset) if twin else func(model_admin, post_request, queryset)

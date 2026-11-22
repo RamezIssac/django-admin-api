@@ -134,7 +134,7 @@ Step by step, with scopes, `.mcp.json` and troubleshooting: [Connect Claude Code
 Tools: `list_models`, `describe_model` (columns, filters, actions, custom views, JSON Schema),
 `list_objects` (admin filters, search, ordering, paging), `resolve_entities` (names to ids and
 models), `get_object`, `create_object` /
-`update_object` (with `dry_run`: the full save pipeline, then rolled back), `delete_object`
+`update_object` (with `dry_run`: the admin's validation only, nothing saved), `delete_object`
 (preview unless `confirm=true`), `run_action`, `run_view` (custom views), plus one tool per view
 published with `mcp_tool=`.
 
@@ -145,9 +145,17 @@ a page past the cap answers `invalid_arguments` with the same hint.
 On the admin: `mcp_description = "…"` (context for the LLM; a string or a callable of the request),
 `mcp_enabled = False` (hide from MCP only). To reuse another attribute, override
 `get_mcp_description(self, request)` (`ApiAdminMixin`):
-`def get_mcp_description(self, request): return self.description`. In hooks: `request.is_mcp`, and
-`request.is_dry_run` to skip side effects such as
-e-mails during a dry run (or use `transaction.on_commit`, which a dry run discards).
+`def get_mcp_description(self, request): return self.description`. In hooks: `request.is_mcp` and
+`request.is_dry_run`.
+
+**Dry runs validate only.** A `create_object` / `update_object` dry run checks permissions and
+the admin's queryset, then runs the admin's form and inline validation (`get_form`,
+`_create_formsets`, `is_valid`). It calls no `save_form`, `save_model`, `save_related` or `log_*`:
+no signal or side effect runs and nothing is written. A write view's dry run checks the
+permissions and the params and does not call the view. `totals` and values computed on save come
+with the real write. Note: an admin with its own `process_changeform` defines
+`validate_changeform(request, obj, change)` too, returning a `writes.ChangeformResult`, because a
+dry run runs that (or the default validation) and never `process_changeform`.
 
 ### Business wording
 
@@ -263,15 +271,19 @@ An engine subclasses `admin_api.contrib.search.engines.base.SearchEngine`: `upse
 ### Safer writes
 
 - **Totals.** `api_totals = ["value", "quantity"]` on the admin (field names, admin methods or
-  model attributes) adds a `totals` entry to the result of `create_object`, `update_object` and
-  their dry runs. The saved document is read back first, so values written by signals are included.
+  model attributes) adds a `totals` entry to the result of `create_object` and `update_object`.
+  The saved document is read back first, so values written by signals are included.
 - **Require a dry run.** `AdminMcpSite(api_site, require_dry_run=True)` makes `create_object`,
   `update_object` and write views refuse a real write unless it passes the `confirm_token` that a
   valid dry run of the same arguments returned. The token works once, within 15 minutes, for the
   same user, API token, model, ID and data, and only while the object's stored row is unchanged.
+  When a write depends on state stored elsewhere (a status log, related rows), the admin returns
+  it from `get_mcp_confirm_state(self, request, obj)` (plain values such as the last log row's ID;
+  `obj` is `None` for a create) and the token is bound to it too.
   Permissions are checked first: a user who may not write gets 403, not 409.
   An admin overrides the site with `mcp_require_dry_run = True | False`. `delete_object` keeps its
-  `confirm`; `run_action` has no dry run and is not gated.
+  `confirm`; `run_action` has no dry run and is not gated, and its `delete_selected` previews
+  unless `confirm=true`.
 - **Audit.** The LogEntry of an MCP create or update reads, for example, `Changed Status. Via MCP.`
   Every tool call is logged at INFO to the `admin_api.mcp.audit` logger: tool, user pk, token
   prefix, IP, model, pk, view, action, pks, `all`, `dry_run`, `confirm` and the outcome (`ok` or the
@@ -319,7 +331,7 @@ class ClientAdmin(admin.ModelAdmin):
 | `detail` | `True`: `method(request, obj, **params)`, at `<pk>/views/<name>/`. `False` (default): `method(request, **params)`, at `views/<name>/` |
 | `params` | a `Form` class (validated; `cleaned_data` passed as arguments; JSON Schema generated from it) or a dict of JSON Schema properties (+ `required=[...]`; `format: date / date-time / time` arrive parsed) |
 | `permissions` | like `@admin.action(permissions=...)`: every `has_<perm>_permission` must pass (`view` = view or change). Default `["view"]` |
-| `writes` | default: `True` when `permissions` asks for more than `view`. Write views are POST only, run in a transaction, need a write token scope, are hidden from read-only MCP sites and support MCP `dry_run`. Read views take GET (query string) or POST (JSON body) |
+| `writes` | default: `True` when `permissions` asks for more than `view`. Write views are POST only, run in a transaction, need a write token scope, are hidden from read-only MCP sites and support MCP `dry_run` (permissions and params checked, the view not called). Read views take GET (query string) or POST (JSON body) |
 | `name`, `title`, `description` | default: method name, derived title, docstring |
 | `mcp_tool="name"` | also publish the view as its own MCP tool (top-level admins) |
 | `api_enabled=False` / `mcp_enabled=False` | hide from both / from MCP only |

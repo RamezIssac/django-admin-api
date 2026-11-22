@@ -259,17 +259,17 @@ def test_validation_error_envelope(call, data):
     assert out["non_field_errors"] == ["Slug must start with S-."]
 
 
-def test_dry_run_create_rolls_back_everything(call, data, django_capture_on_commit_callbacks):
+def test_dry_run_create_validates_and_saves_nothing(call, data, django_capture_on_commit_callbacks):
     payload = {"slug": "S-9", "client": data["client"].pk, "inlines": {"items": [{"product": "Milk", "price": "7"}]}}
     with django_capture_on_commit_callbacks(execute=True) as callbacks:
         out, err = call("create_object", {"model": "testapp.sales", "data": payload, "dry_run": True})
     assert not err, out
-    assert out["dry_run"] is True and out["valid"] is True and out["object"]["slug"] == "S-9"
+    assert out == {"dry_run": True, "valid": True, "note": "Valid. Nothing was saved; totals come with the real write."}
     assert not Sales.objects.filter(slug="S-9").exists()
     assert not SalesItem.objects.filter(product="Milk").exists()
     assert not LogEntry.objects.exists()
-    assert testadmin.SAVE_LOG == [("S-9", True)]  # hooks ran and could see the dry run
-    assert callbacks == [] and testadmin.ON_COMMIT_LOG == []  # on_commit side effects discarded
+    assert testadmin.SAVE_LOG == []  # save_model is not called
+    assert callbacks == [] and testadmin.ON_COMMIT_LOG == []
 
 
 def test_dry_run_invalid_is_not_an_error(call, data):
@@ -286,7 +286,7 @@ def test_dry_run_update(call, data):
     out, err = call(
         "update_object", {"model": "testapp.sales", "pk": sale.pk, "data": {"status": "draft"}, "dry_run": True}
     )
-    assert not err and out["valid"] and out["object"]["status"] == "draft"
+    assert not err and out["valid"] and "object" not in out
     sale.refresh_from_db()
     assert sale.status == "posted"
 
@@ -300,6 +300,36 @@ def test_delete_needs_confirm(call, data):
     out, err = call("delete_object", {"model": "testapp.sales", "pk": sale.pk, "confirm": True})
     assert not err and out == {"deleted": True, "object": {"id": sale.pk, "label": "S-2"}}
     assert not Sales.objects.filter(pk=sale.pk).exists()
+
+
+def test_delete_selected_needs_confirm(call, data, mcp):
+    assert mcp.get_tool("run_action").input_schema["properties"]["confirm"]["default"] is False
+    args = {"model": "testapp.sales", "action": "delete_selected", "ids": [s.pk for s in data["sales"][:2]]}
+    out, err = call("run_action", args)
+    assert not err and out["confirm_required"] is True and out["count"] == 2
+    assert out["note"] == "Nothing was deleted. Call again with confirm=true to delete."
+    assert out["preview"]["model_count"] == {"sales": 2, "sales items": 1} and out["preview"]["can_delete"] is True
+    assert Sales.objects.count() == 5
+    out, err = call("run_action", {**args, "confirm": True})
+    assert not err and out["count"] == 2 and "confirm_required" not in out
+    assert sorted(Sales.objects.values_list("slug", flat=True)) == ["S-3", "S-4", "S-5"]
+
+
+def test_delete_selected_twin_runs_without_preview(call, data, monkeypatch):
+    def api_delete_selected(request, queryset):
+        return {"kept": queryset.count()}
+
+    monkeypatch.setattr(testadmin.SalesAdmin, "api_delete_selected", staticmethod(api_delete_selected), raising=False)
+    args = {"model": "testapp.sales", "action": "delete_selected", "ids": [data["sales"][0].pk]}
+    out, err = call("run_action", args)
+    assert not err and out["result"] == {"kept": 1} and "confirm_required" not in out
+
+
+def test_delete_selected_preview_follows_filters(call, data):
+    args = {"model": "testapp.sales", "action": "delete_selected", "all": True, "filters": {"status__exact": "draft"}}
+    out, err = call("run_action", args)
+    assert not err and out["count"] == 2 and out["preview"]["model_count"] == {"sales": 2}
+    assert Sales.objects.count() == 5
 
 
 def test_run_action(call, data):
