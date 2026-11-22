@@ -7,6 +7,7 @@ a Django request context and raise :class:`admin_api.errors.ApiError` on failure
 from __future__ import annotations
 
 import copy
+import math
 from dataclasses import asdict
 
 from django.contrib.admin.utils import NotRelationField, get_fields_from_path
@@ -453,7 +454,7 @@ def list_objects(site, request, args) -> dict:
     if search and data["count"] == 0:
         data.update(_empty_search_hint(model_admin, request))
     if max_rows and data["count"] > max_rows:
-        data["pages"] = -(-max_rows // data["per_page"])
+        data["pages"] = math.ceil(max_rows / per_page)
         data["hint"] = _too_many_rows_hint(max_rows)
     return {**head, **data}
 
