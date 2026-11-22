@@ -31,7 +31,7 @@ class Entry:
 
 @dataclass(frozen=True)
 class Hit:
-    """One stored row an engine found. ``engine_score`` is the engine's own relevance."""
+    """One stored row an engine found. ``engine_score`` is the engine's own relevance, 0 to 1."""
 
     content_type: ContentType
     object_pk: str | None
@@ -66,12 +66,8 @@ class SearchQuery:
 
 class SearchEngine:
     """Base class of search engines, configured under ``ADMIN_API_SEARCH["ENGINES"]``.
+    ``scope_pushdown``: :meth:`search` applies each scope's ``queryset`` itself."""
 
-    ``fuzzy``: the engine finds hits beyond exact, prefix, word and contains matches.
-    ``scope_pushdown``: :meth:`search` applies each scope's ``queryset`` itself.
-    """
-
-    fuzzy = False
     scope_pushdown = False
 
     def __init__(self, name: str = "", options: dict | None = None):
@@ -82,8 +78,8 @@ class SearchEngine:
         """Insert object rows, or update the stored ones with the same (content type, pk, field)."""
         raise NotImplementedError
 
-    def delete_rows(self, content_type: ContentType, object_pk: str, fields=None) -> None:
-        """Delete an object's rows, only those of ``fields`` when given."""
+    def delete_rows(self, content_type: ContentType, object_pk: str, fields) -> None:
+        """Delete the rows of an object's ``fields``."""
         raise NotImplementedError
 
     def replace_model_rows(self, rows: list[Entry]) -> None:
@@ -97,10 +93,6 @@ class SearchEngine:
     def search(self, query: SearchQuery) -> list[Hit]:
         """Rows of the best ``query.limit`` candidates after ``query.offset``, best first."""
         raise NotImplementedError
-
-    def fuzzy_confidence(self, hit: Hit) -> float:
-        """0 to 1 for a hit that is not an exact, prefix, word or contains match."""
-        return 0.0
 
     def check(self) -> list:
         """System check messages about this engine's setup."""

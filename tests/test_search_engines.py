@@ -16,7 +16,6 @@ from tests.testapp.models import Client
 class MemoryEngine(SearchEngine):
     """Rows in a dict, substring matching, insertion order, no scoping of its own."""
 
-    fuzzy = True
     scope_pushdown = False
 
     def __init__(self, name="", options=None):
@@ -27,10 +26,9 @@ class MemoryEngine(SearchEngine):
         for e in entries:
             self.rows[(e.kind, e.content_type.pk, e.object_pk, e.field, e.language)] = e
 
-    def delete_rows(self, content_type, object_pk, fields=None):
-        for key in [k for k in self.rows if k[1] == content_type.pk and k[2] == object_pk]:
-            if fields is None or key[3] in fields:
-                del self.rows[key]
+    def delete_rows(self, content_type, object_pk, fields):
+        for key in [k for k in self.rows if k[1] == content_type.pk and k[2] == object_pk and k[3] in fields]:
+            del self.rows[key]
 
     def replace_model_rows(self, rows):
         self.rows = {k: v for k, v in self.rows.items() if k[0] != "model"}
@@ -57,9 +55,6 @@ class MemoryEngine(SearchEngine):
             for e in found
             if (e.content_type.pk, e.object_pk) in page
         ]
-
-    def fuzzy_confidence(self, hit):
-        return hit.engine_score
 
 
 @pytest.fixture

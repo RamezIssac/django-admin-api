@@ -18,7 +18,7 @@ from django.core.exceptions import FieldDoesNotExist
 from django.db import DEFAULT_DB_ALIAS, models, transaction
 from django.utils import timezone, translation
 
-from ...mcp.resolve import CODE_FIELDS, _languages, is_excluded
+from ...mcp.resolve import _languages, is_excluded
 from .conf import get_engine, search_settings
 from .engines.base import MODEL, OBJECT, Entry
 from .fold import fold
@@ -50,13 +50,23 @@ def local_fields(model, search_fields) -> tuple[str, ...]:
     return tuple(dict.fromkeys(f for f in (local_field_name(model, s) for s in search_fields or ()) if f))
 
 
-def code_fields(model_admin) -> frozenset:
-    return CODE_FIELDS | frozenset(getattr(model_admin, "search_index_code_fields", None) or ())
-
-
 def nearest_model(model, registered) -> type[models.Model] | None:
     """``model`` or its nearest ancestor in ``registered`` (the admin a row of ``model`` belongs to)."""
     return next((m for m in model.__mro__ if m in registered), None)
+
+
+def owned_models(model, registered) -> list:
+    """``model`` and the subclasses without an admin in ``registered`` whose rows belong to it."""
+    others = (m for m in apps.get_models() if m is not model and issubclass(m, model))
+    return [model, *(m for m in others if nearest_model(m, registered) is model)]
+
+
+def model_names(model, model_admins, language) -> list[tuple[str, str]]:
+    """``(field, text)`` of the model's verbose name, plural, model name and admins' ``search_aliases``."""
+    with translation.override(language):
+        names = [(f, str(getattr(model._meta, f))) for f in LABEL_FIELDS]
+    aliases = [a for ma in model_admins for a in (getattr(ma, "search_aliases", None) or {}).get(language, ())]
+    return names + [(f"alias.{i}", str(alias)) for i, alias in enumerate(aliases)]
 
 
 def content_type_of(model) -> ContentType:
@@ -76,13 +86,12 @@ def default_sites():
 class Indexer:
     """Builds and writes the rows of the indexed models of ``sites`` (default: every MCP site)."""
 
-    def __init__(self, sites=None, engine=None):
+    def __init__(self, sites=None):
         self._sites = sites
-        self._engine = engine
 
     @property
     def engine(self):
-        return self._engine or get_engine()
+        return get_engine()
 
     @cached_property
     def admins(self) -> dict:
@@ -109,10 +118,6 @@ class Indexer:
 
     def admin_model(self, model):
         return nearest_model(model, self.admins)
-
-    def owned_models(self, model) -> list:
-        """``model`` and the models without an indexed admin whose rows belong to it."""
-        return [m for m in apps.get_models() if m is model or (issubclass(m, model) and self.admin_model(m) is model)]
 
     # --- object rows --------------------------------------------------------------------------
     def row_target(self, obj):
@@ -153,17 +158,11 @@ class Indexer:
     def model_entries(self) -> list[Entry]:
         """Each indexed model's verbose name, plural and model name under every language, plus the
         admin's ``search_aliases``; one row per (model, folded text)."""
-        rows = []
+        rows, languages = [], _languages()
         for model, model_admins in self.admins.items():
             content_type, seen = content_type_of(model), set()
-            for language in _languages():
-                with translation.override(language):
-                    names = [(f, str(getattr(model._meta, f))) for f in LABEL_FIELDS]
-                aliases = [
-                    a for ma in model_admins for a in (getattr(ma, "search_aliases", None) or {}).get(language, ())
-                ]
-                names.extend((f"alias.{i}", str(alias)) for i, alias in enumerate(aliases))
-                for field, text in names:
+            for language in languages:
+                for field, text in model_names(model, model_admins, language):
                     norm = fold(text)
                     if norm and norm not in seen:
                         seen.add(norm)
@@ -180,7 +179,7 @@ class Indexer:
         """Rewrite every row of ``model``, one transaction per batch, then prune rows this run did
         not write. Returns the number of objects processed."""
         started = timezone.now()
-        owned_types = [content_type_of(m) for m in self.owned_models(model)]
+        owned_types = [content_type_of(m) for m in owned_models(model, self.admins)]
         if not self.index_fields(model):
             self.engine.prune(owned_types, older_than=started)
             return 0
@@ -197,16 +196,16 @@ class Indexer:
             with transaction.atomic():
                 self.engine.upsert(entries)
             batch.clear()
+            if stdout:
+                stdout.write(f"processed {done}/{total} {label}")
+                stdout.flush()
 
         for obj in queryset.iterator(chunk_size=batch_size):
             batch.append(obj)
             done += 1
-            if len(batch) >= batch_size or done == total:
+            if len(batch) >= batch_size:
                 flush()
-                if stdout:
-                    stdout.write(f"processed {done}/{total} {label}")
-                    getattr(stdout, "flush", lambda: None)()
-        if batch:  # rows added while iterating
+        if batch:
             flush()
         self.engine.prune(owned_types, older_than=started)
         return done

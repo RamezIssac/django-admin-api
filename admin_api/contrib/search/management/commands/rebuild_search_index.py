@@ -18,7 +18,7 @@ class Command(BaseCommand):
         labels = None
         if models:
             labels = {label.lower() for label in models}
-            known = {f"{m._meta.app_label}.{m._meta.model_name}" for m in indexer.admins}
+            known = {m._meta.label_lower for m in indexer.admins}
             unknown = sorted(labels - known)
             if unknown:
                 raise CommandError(f"Not indexed: {', '.join(unknown)}. Indexed: {', '.join(sorted(known)) or 'none'}.")

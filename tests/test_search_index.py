@@ -183,9 +183,9 @@ def test_ensure_drops_models_no_longer_indexed(indexer):
 
 
 def test_ensure_refuses_an_unsafe_ctype(indexer, monkeypatch):
-    from admin_api.contrib.search.management.commands import search_index
+    from admin_api.contrib.search.engines import db
 
-    monkeypatch.setattr(search_index, "database_ctype", lambda: "C")
+    monkeypatch.setattr(db, "database_ctype", lambda: "C")
     with pytest.raises(CommandError, match="LC_CTYPE is 'C'"):
         call_command("search_index", "ensure")
 

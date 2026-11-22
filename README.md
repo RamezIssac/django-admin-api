@@ -218,7 +218,7 @@ ADMIN_API_SEARCH = {
 ```
 
 An engine subclasses `admin_api.contrib.search.engines.base.SearchEngine`: `upsert`, `delete_rows`,
-`replace_model_rows`, `prune`, `search`, `fuzzy_confidence`, and the flags `fuzzy` and
+`replace_model_rows`, `prune`, `search` (hits carry an `engine_score` from 0 to 1), and the flag
 `scope_pushdown`. Engines without `scope_pushdown` get their hits filtered through the admin's
 `get_queryset(request)`.
 
