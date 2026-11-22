@@ -53,3 +53,9 @@ class NotFound(ApiError):
 class MethodNotAllowed(ApiError):
     status = 405
     code = "method_not_allowed"
+
+
+class PayloadTooLarge(ApiError):
+    status = 413
+    code = "payload_too_large"
+    default_detail = gettext_lazy("The request body is larger than the server's DATA_UPLOAD_MAX_MEMORY_SIZE.")

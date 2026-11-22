@@ -18,7 +18,7 @@ def encode_value(value):
     if isinstance(value, models.Model):
         return {"pk": encode_value(value.pk), "str": str(value)}
     if isinstance(value, FieldFile):
-        return value.name or None
+        return {"name": value.name, "url": value.url} if value else None
     if isinstance(value, (list, tuple, set, frozenset)):
         return [encode_value(v) for v in value]
     if isinstance(value, dict):

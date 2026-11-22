@@ -15,14 +15,18 @@ So ``get_form``, ``_create_formsets``, ``save_form``, ``save_model``, ``save_rel
 
 from __future__ import annotations
 
+import base64
 import copy
 import datetime
 import json
+import mimetypes
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 
 from django import forms
 from django.contrib.messages.storage.base import BaseStorage
+from django.core.exceptions import SuspiciousFileOperation
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError, models, router, transaction
 from django.forms.formsets import all_valid
 from django.http import QueryDict
@@ -33,10 +37,12 @@ from django.utils.dateparse import parse_datetime
 from .detail import inline_prefixes, inline_queryset
 from .encoders import encode_value
 from .errors import ApiError
+from .sites import AdminApiSite
 
 IGNORED_KEYS = frozenset({"pk", "str"})
 INLINES_KEY = "inlines"
 ROW_DELETE_KEY = "_delete"
+UPLOAD_KEYS = ("filename", "content_base64")
 
 
 class InvalidJson(ApiError):
@@ -171,25 +177,62 @@ def field_post_values(name: str, form_field, value) -> dict[str, list[str]]:
 
 
 def form_initial(form_class, instance, **form_kwargs) -> dict:
-    """Current values as the change form would render them (python values)."""
+    """Current values as the change form would render them (python values). File fields are left
+    out: the form keeps the stored file unless the payload sends one."""
     if issubclass(form_class, forms.BaseModelForm):
         form_kwargs["instance"] = instance
     form = form_class(**form_kwargs)
-    return {name: form.get_initial_for_field(f, name) for name, f in form.fields.items()}
+    return {
+        name: form.get_initial_for_field(f, name)
+        for name, f in form.fields.items()
+        if not isinstance(f, forms.FileField)
+    }
 
 
 def _put(data: QueryDict, key: str, values: list[str]):
     data.setlist(key, values)
 
 
-def _fill_form(data, prefix, base_fields, values, errors, error_key=None):
+class Uploads(MultiValueDict):
+    """``request.FILES`` for the change form, built from ``{"filename", "content_base64"}`` values."""
+
+    def __init__(self, max_size: int):
+        super().__init__()
+        self.max_size = max_size
+
+    def add(self, key: str, value: dict) -> None:
+        """Store ``value`` as an uploaded file under ``key``. Bad input raises ``ValueError``."""
+        filename, content = (value.get(k) for k in UPLOAD_KEYS)
+        if not (filename and isinstance(filename, str) and isinstance(content, str)):
+            raise ValueError('Expected {"filename": "...", "content_base64": "..."}.')
+        try:
+            raw = base64.b64decode(content, validate=True)
+        except ValueError:
+            raise ValueError("content_base64 is not valid base64.") from None
+        if len(raw) > self.max_size:
+            raise ValueError(f"The file has {len(raw)} bytes, the limit is {self.max_size}.")
+        content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        try:
+            self[key] = SimpleUploadedFile(filename, raw, content_type)
+        except SuspiciousFileOperation:
+            raise ValueError(f"{filename!r} is not a valid file name.") from None
+
+
+def _fill_form(data, files, prefix, base_fields, values, errors):
     for key, value in values.items():
         if key not in base_fields:
             continue
-        if isinstance(base_fields[key], forms.FileField):
-            errors.setdefault(error_key or key, []).append("File upload is not supported by the JSON API yet.")
-            continue
         full = f"{prefix}-{key}" if prefix else key
+        if isinstance(base_fields[key], forms.FileField):
+            # null clears the file (ClearableFileInput); other values, such as what reads return, keep it
+            if value is None:
+                _put(data, f"{full}-clear", ["on"])
+            elif isinstance(value, dict) and value.keys() & UPLOAD_KEYS:
+                try:
+                    files.add(full, value)
+                except ValueError as exc:
+                    errors.setdefault(key, []).append(str(exc))
+            continue
         for post_key, post_values in field_post_values(full, base_fields[key], value).items():
             _put(data, post_key, post_values)
 
@@ -203,8 +246,8 @@ def _check_keys(payload: dict, allowed: set, errors: dict, where: str = ""):
 # --------------------------------------------------------------------------------------------
 # payload → POST data
 # --------------------------------------------------------------------------------------------
-def build_post_data(model_admin, request, obj, payload: dict, *, change: bool, partial: bool) -> QueryDict:
-    """Translate the JSON payload into the change form's POST data.
+def build_post_data(model_admin, request, obj, payload: dict, *, change: bool, partial: bool):
+    """Translate the JSON payload into the change form's POST data and FILES (:class:`Uploads`).
 
     ``partial`` (PATCH): missing fields keep their current values. Otherwise (POST/PUT)
     missing fields take the add-form initial values (model defaults).
@@ -214,6 +257,8 @@ def build_post_data(model_admin, request, obj, payload: dict, *, change: bool, p
     rows that are not mentioned are kept unchanged.
     """
     data = QueryDict(mutable=True)
+    target = getattr(request, "admin_api_target", None)
+    files = Uploads((target.api_site if target else AdminApiSite).max_upload_size)
     errors: dict = {}
     inline_errors: dict = {}
 
@@ -222,7 +267,9 @@ def build_post_data(model_admin, request, obj, payload: dict, *, change: bool, p
     _check_keys(payload, set(base_fields) | IGNORED_KEYS | {INLINES_KEY}, errors)
 
     initial = form_initial(form_class, obj if (change and partial) else None)
-    _fill_form(data, "", base_fields, {**initial, **{k: v for k, v in payload.items() if k in base_fields}}, errors)
+    _fill_form(
+        data, files, "", base_fields, {**initial, **{k: v for k, v in payload.items() if k in base_fields}}, errors
+    )
 
     inlines_payload = payload.get(INLINES_KEY) or {}
     if not isinstance(inlines_payload, dict):
@@ -236,7 +283,7 @@ def build_post_data(model_admin, request, obj, payload: dict, *, change: bool, p
         if not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
             inline_errors[prefix] = {"non_form_errors": ["Must be a list of objects."]}
             continue
-        _build_inline(data, prefix, FormSet, inline, request, obj, change, rows, inline_errors)
+        _build_inline(data, files, prefix, FormSet, inline, request, obj, change, rows, inline_errors)
 
     for prefix in inlines_payload:
         if prefix not in known_prefixes:
@@ -245,10 +292,10 @@ def build_post_data(model_admin, request, obj, payload: dict, *, change: bool, p
     if errors or inline_errors:
         raise ValidationFailed(**_envelope(errors, [], inline_errors))
     data._mutable = False
-    return data
+    return data, files
 
 
-def _build_inline(data, prefix, FormSet, inline, request, obj, change, rows, inline_errors):
+def _build_inline(data, files, prefix, FormSet, inline, request, obj, change, rows, inline_errors):
     form_class = FormSet.form
     base_fields = form_class.base_fields
     pk_name = FormSet.model._meta.pk.name
@@ -292,7 +339,7 @@ def _build_inline(data, prefix, FormSet, inline, request, obj, change, rows, inl
         row = updates.get(str(instance.pk), {})
         values = {**form_initial(form_class, instance), **{k: v for k, v in row.items() if k in base_fields}}
         errs: dict = {}
-        _fill_form(data, f"{prefix}-{i}", base_fields, values, errs)
+        _fill_form(data, files, f"{prefix}-{i}", base_fields, values, errs)
         _put(data, f"{prefix}-{i}-{pk_name}", [str(instance.pk)])
         if fk is not None:
             _put(data, f"{prefix}-{i}-{fk.name}", [str(obj.pk)])
@@ -304,7 +351,7 @@ def _build_inline(data, prefix, FormSet, inline, request, obj, change, rows, inl
     for row in new_rows:
         values = {**form_initial(form_class, None), **{k: v for k, v in row.items() if k in base_fields}}
         errs = {}
-        _fill_form(data, f"{prefix}-{i}", base_fields, values, errs)
+        _fill_form(data, files, f"{prefix}-{i}", base_fields, values, errs)
         if errs:
             row_errors.append({"index": i, "pk": None, "errors": errs})
         i += 1
@@ -415,8 +462,8 @@ def _form_errors(form) -> dict:
 # entry point
 # --------------------------------------------------------------------------------------------
 def save_from_payload(model_admin, request, obj, payload: dict, *, change: bool, partial: bool, dry_run=False):
-    data = build_post_data(model_admin, request, obj, payload, change=change, partial=partial)
-    post_request = as_post_request(request, data)
+    data, files = build_post_data(model_admin, request, obj, payload, change=change, partial=partial)
+    post_request = as_post_request(request, data, files)
     if dry_run:  # the admin's own validate_changeform(request, obj, change), else the default one
         own = getattr(model_admin, "validate_changeform", None)
         result = own(post_request, obj, change) if own else validate_changeform(model_admin, post_request, obj, change)
