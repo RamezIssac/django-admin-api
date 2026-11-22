@@ -36,8 +36,7 @@
   arguments are `id` and `ids`; `pk` and `pks` stay accepted as aliases for one release. An inline
   row sent with `id` updates that row, and `describe_model`'s update schema names that key `id`.
 - Messages use verbose names and "ID", wrapped in `gettext`: `"No sales with ID 9."`,
-  `"This connection may not change sales."`, `"No view 'x' on sales."`, notes say "the ID shown
-  is provisional". Unknown, hidden and excluded models all answer `"This kind of record is not
+  `"This connection may not change sales."`, `"No view 'x' on sales."`. Unknown, hidden and excluded models all answer `"This kind of record is not
   available here."` (was `No API for app.model` / `No MCP access to app.model`).
 - `import admin_api` works without Django settings: the scope verbs and error default details are
   `gettext_lazy` strings.
@@ -69,22 +68,20 @@
   set their own keep it. Backends receive `limit=` in `search_objects` and
   `search_models`.
 - CI runs the search tests on Postgres 17 (nox session `tests_postgres`).
-- **Per-user MCP memory.** New model `admin_api.McpUserMemory` (migration `0003`) with
-  `preference` rows per user, and `McpUserMemoryAdmin` (own rows; superusers all).
-  Preferences `audience` (`business` default, `developer`), `language` and `notes` are loaded
-  once per request into `request.mcp_memory` by `AdminMcpSite.get_user_memory(request)`.
-  `get_instructions` now swaps the business-wording paragraph for a developer one and appends
-  the user's language and notes; `get_language` returns the user's language.
-  `AdminMcpSite.prepare_request` is an instance method now.
-- New MCP tool `set_preference(key, value)`: stores or clears one of the caller's preferences.
+- **Per-user MCP instructions.** New model `admin_api.McpUserInstructions` (migration `0003`):
+  one instructions text per user, set in the Django admin (`McpUserInstructionsAdmin`). The default
+  `AdminMcpSite.get_instructions(request)` appends it to the site's instructions, cut at
+  `instructions_max_length` (4,096) with a note.
 - MCP `list_objects` pages through at most `AdminMcpSite.list_max_rows` records of a query (default
   1000, `None` for no cap). A larger query reports only the reachable `pages` and adds a `hint`
   pointing at reports, filters and search; a page past the cap answers `invalid_arguments`.
-- **MCP dry runs capture e-mail.** A dry run rolled back the database but still delivered mail
-  sent from `save()`, a signal or a write view. Now every e-mail backend opened during a dry run
-  collects its messages, and the result lists them as `suppressed_emails` (`recipients`,
-  `subject`). Other non-database side effects still happen: run them from
-  `transaction.on_commit`, which a dry run discards.
+- **MCP dry runs validate only.** `dry_run=true` on `create_object` / `update_object` runs the
+  permission checks, the admin's queryset and its form and inline validation, and saves nothing:
+  no `save_model`, signal, `LogEntry` or e-mail, no transaction to roll back. A write view's dry
+  run checks permissions and params without calling the view. The result is `dry_run`, `valid`
+  and `errors` or `note`; `object` and `totals` come with the real write only.
+  `writes.validate_changeform` is the validation half of `default_process_changeform`; an admin
+  replaces it for dry runs with its own `validate_changeform(request, obj, change)`.
 - **`get_mcp_confirm_state(request, obj)`** on the admin (default on `ApiAdminMixin`: `None`)
   adds state stored outside the object's row, such as the last row of a status log, to the
   `require_dry_run` confirm-token fingerprint. A concurrent change to that state now gets 409

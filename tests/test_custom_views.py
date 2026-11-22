@@ -384,15 +384,14 @@ def test_run_view_errors(call, data):
     assert err and out["error"] == "invalid_arguments"
 
 
-def test_run_view_dry_run_rolls_back(call, data):
+def test_run_view_dry_run_does_not_call_the_view(call, data):
     sale = data["sales"][0]
     out, err = call("run_view", {"model": "testapp.sales", "view": "post", "pk": sale.pk, "dry_run": True})
     assert not err, out
-    assert out["dry_run"] is True and out["result"]["status"] == "posted"
-    assert out["messages"] == [{"level": "info", "text": "S-1 posted."}]
+    assert out == {"dry_run": True, "valid": True, "note": "Valid. The view did not run; nothing was saved."}
     sale.refresh_from_db()
     assert sale.status == "draft"
-    assert testadmin.SAVE_LOG == [("S-1", True)]  # request.is_dry_run seen by the view
+    assert testadmin.SAVE_LOG == []
 
     out, err = call("run_view", {"model": "testapp.sales", "view": "post", "pk": sale.pk})
     assert not err
