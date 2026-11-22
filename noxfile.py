@@ -5,6 +5,7 @@
     uvx nox -s tests                         # the whole matrix
     uvx nox -s "tests(django=6.1, mcp=latest)"   # one combination (see `uvx nox -l`)
     uvx nox -s tests -- -k subadmin          # extra args go to pytest
+    uvx nox -s tests_postgres                # search contrib on Postgres (POSTGRES_* env vars)
 
 Each combination gets its own venv (built by uv), with the dev dependencies of pyproject.toml
 and the Django / MCP SDK / django-subadmin versions of that row. ``uv run pytest`` keeps using
@@ -12,6 +13,8 @@ the lock file (one combination); this is for the supported range.
 """
 
 from __future__ import annotations
+
+from pathlib import Path
 
 import nox
 
@@ -60,6 +63,18 @@ def tests(session: nox.Session, django: str, mcp: str) -> None:
         # a reused venv may still have it from an older run
         session.run("uv", "pip", "uninstall", "--python", session.python, "django-subadmin", silent=True)
     session.run("pytest", "-q", "-rs", *session.posargs)
+
+
+# The search contrib's Postgres paths (pg_trgm, GIN index, trigram pass) and the resolver on top.
+POSTGRES_TESTS = [*sorted(str(p) for p in Path("tests").glob("test_search_*.py")), "tests/test_mcp_resolve.py"]
+
+
+@nox.session(python="3.12")
+def tests_postgres(session: nox.Session) -> None:
+    """The search contrib tests on Postgres; the server comes from POSTGRES_HOST / _PORT / _USER /
+    _PASSWORD / _DB (see tests/settings_postgres.py)."""
+    session.install("-e", ".", *_dev_dependencies(), "django>=5.2,<5.3", MCPS["latest"], "psycopg[binary]")
+    session.run("pytest", "-q", "-rs", "--ds", "tests.settings_postgres", *(session.posargs or POSTGRES_TESTS))
 
 
 @nox.session(python="3.12")

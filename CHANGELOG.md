@@ -34,17 +34,41 @@
   (`{"id", "label"}`), `list_objects` `columns[0]`, write results, delete previews, view results;
   `describe_model` `pk_field` is now `id_field`. `list_models` items start with `name`. The tool
   arguments are `id` and `ids`; `pk` and `pks` stay accepted as aliases for one release. An inline
-  row sent with `id` updates that row.
+  row sent with `id` updates that row, and `describe_model`'s update schema names that key `id`.
 - Messages use verbose names and "ID", wrapped in `gettext`: `"No sales with ID 9."`,
   `"This connection may not change sales."`, `"No view 'x' on sales."`, notes say "the ID shown
   is provisional". Unknown, hidden and excluded models all answer `"This kind of record is not
   available here."` (was `No API for app.model` / `No MCP access to app.model`).
+- `import admin_api` works without Django settings: the scope verbs and error default details are
+  `gettext_lazy` strings.
 - `PermissionDeniedError` has a default detail ("You do not have permission to do this."); the
   services pass one per operation (`"You may not change this sales."`). Promoted view tools say
   "(Same as run_view 'post' on sales.)" and "ID of the sales.".
 - `AdminMcpSite.get_instructions(request)` (sent at `initialize`; the HTTP view builds one SDK
   `Server` per request) and `AdminMcpSite.get_language(request)` (default `None`: keep the active
   language), which wraps `call_tool` and `get_tools` in `translation.override`.
+- **New opt-in app `admin_api.contrib.search`** (§14.10): a search index behind `resolve_entities`.
+  One row per (object, search field) and per (model, label, language), text folded by `fold()`
+  (accents, case, Arabic letter variants, digits, the Arabic article). Rows follow the MCP-exposed
+  admins' local `search_fields` / `api_search_fields` and `Meta` labels under every `LANGUAGES` code.
+  Saves update rows on commit; `post_migrate` refreshes the label rows. Hits are scoped like the live
+  backend (exposure, permissions, token scopes, `excluded_models`, live search fields) and checked
+  against the admin's `get_queryset(request)` inside the query. Run `migrate`, then
+  `search_index ensure` on every deploy.
+- Pluggable engines through `ADMIN_API_SEARCH` (`DEFAULT_ENGINE`, `ENGINES`), interface
+  `engines.base.SearchEngine`. The built-in `db` engine (`admin_api_search_entry` table) runs on every
+  database; on Postgres the migration installs `pg_trgm` and a GIN index, and a trigram pass adds
+  `fuzzy` matches.
+- Commands `rebuild_search_index [--model] [--models-only] [--batch-size]` and `search_index ensure`
+  (fingerprint-gated rebuild; exits non-zero on a `C` / `POSIX` database ctype). System check
+  `admin_api_search.W001` warns about that ctype.
+- `admin_api.contrib.search.indexer.indexing_suspended()`: a context manager for bulk loads; saves
+  inside it (this thread or task) skip the index until `rebuild_search_index` runs.
+- Admin hooks `get_search_index_fields()`, `search_index_code_fields`, `search_aliases`.
+- Installing the app sets `AdminMcpSite.entity_backend_class` to `SearchEntityBackend`; sites that
+  set their own keep it. Backends receive `limit=` in `search_objects` and
+  `search_models`.
+- CI runs the search tests on Postgres 17 (nox session `tests_postgres`).
 - **Per-user MCP memory.** New model `admin_api.McpUserMemory` (migration `0003`) with
   `preference` rows per user, and `McpUserMemoryAdmin` (own rows; superusers all).
   Preferences `audience` (`business` default, `developer`), `language` and `notes` are loaded

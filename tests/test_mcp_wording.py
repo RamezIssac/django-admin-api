@@ -1,14 +1,19 @@
 """MCP answers in business wording: verbose names and "ID" in messages, `id`/`label` keys, hooks."""
 
 import json
+import os
 import re
+import subprocess
+import sys
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 from django.contrib import admin
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.utils import translation
+from jsonschema import Draft202012Validator
 
 from admin_api import scopes
 from admin_api.errors import PermissionDeniedError
@@ -22,6 +27,7 @@ from tests.testapp.admin import ValueBandFilter
 from tests.testapp.models import Client, Sales, SalesItem
 from tests.urls import api_site
 
+ROOT = Path(__file__).resolve().parent.parent
 MODEL_PATH = re.compile(r"\b(testapp|auth|admin_api)\.[a-z_]+")
 
 
@@ -139,11 +145,36 @@ def test_error_wording(call, data, clerk):
     assert out["detail"] == "You may not view sales."
 
 
-def test_scope_message(rf, superuser):
+@pytest.fixture
+def client_view_request(rf, superuser):
     request = rf.get("/")
     request.api_token = ApiToken.objects.create_token(superuser, "t", scopes=["testapp.client:view"])[0]
-    with pytest.raises(PermissionDeniedError, match=r"^This connection may not change sales\.$"):
-        scopes.check(request, Sales._meta, "change")
+    return request
+
+
+@pytest.mark.parametrize("op", ["view", "add", "change", "delete"])
+def test_scope_message(client_view_request, op):
+    with pytest.raises(PermissionDeniedError, match=rf"^This connection may not {op} sales\.$"):
+        scopes.check(client_view_request, Sales._meta, op)
+
+
+def test_scope_message_uses_the_translated_verb(client_view_request, monkeypatch):
+    monkeypatch.setitem(scopes.VERBS, "change", "modify")
+    with pytest.raises(PermissionDeniedError, match=r"^This connection may not modify sales\.$"):
+        scopes.check(client_view_request, Sales._meta, "change")
+
+
+def test_permission_denied_default_detail():
+    assert PermissionDeniedError().detail == "You do not have permission to do this."
+
+
+def test_import_needs_no_settings():
+    code = "import admin_api, admin_api.errors, admin_api.scopes"
+    env = {k: v for k, v in os.environ.items() if k != "DJANGO_SETTINGS_MODULE"}
+    result = subprocess.run(
+        [sys.executable, "-c", code], check=False, cwd=ROOT, env=env, capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_dry_run_note_says_id(call, data):
@@ -204,6 +235,12 @@ def test_inline_row_id_updates_the_row(call, data):
         "id": data["sale"].pk,
         "data": {"inlines": {"items": [{"id": item.pk, "quantity": 3}]}},
     }
+    described, _ = call("describe_model", {"model": "testapp.sales", "id": data["sale"].pk})
+    inline = described["input_schema"]["update"]["properties"]["inlines"]["properties"]["items"]
+    assert list(inline["items"]["properties"])[:2] == ["id", "_delete"] and "pk" not in inline["items"]["properties"]
+    assert inline["items"]["properties"]["_delete"]["description"] == "Delete the existing row given by id."
+    assert "New rows (without id) need: product." in inline["description"]
+    Draft202012Validator(described["input_schema"]["update"]).validate(args["data"])
     out, err = call("update_object", args)
     assert not err, out
     assert SalesItem.objects.filter(sales=data["sale"]).count() == 1
