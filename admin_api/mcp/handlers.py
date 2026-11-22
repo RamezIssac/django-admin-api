@@ -7,6 +7,7 @@ a Django request context and raise :class:`admin_api.errors.ApiError` on failure
 from __future__ import annotations
 
 import copy
+from dataclasses import asdict
 
 from django.contrib.admin.utils import NotRelationField, get_fields_from_path
 from django.contrib.admin.views.main import ORDER_VAR, PAGE_VAR, SEARCH_VAR
@@ -545,7 +546,7 @@ def set_preference(site, request, args):
     key = _arg(args, "key", str)
     request.mcp_memory = memory.set_preference(request.user, key, args.get("value"))
     return {
-        "preferences": request.mcp_memory.as_dict(),
+        "preferences": asdict(request.mcp_memory),
         "note": gettext("Language applies from the next tool call; audience and notes from the next connection."),
     }
 

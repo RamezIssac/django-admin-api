@@ -147,7 +147,7 @@ class AdminMcpSite:
         adjusted to the user's audience, language and notes (see :meth:`get_user_memory`)."""
         memory = self.get_user_memory(request)
         text = self.instructions
-        if memory.audience == DEVELOPER and BUSINESS_WORDING in text:
+        if memory.audience == DEVELOPER:
             text = text.replace(BUSINESS_WORDING, DEVELOPER_WORDING)
         lines = [text]
         if memory.language:

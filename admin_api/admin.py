@@ -6,6 +6,8 @@ from django import forms
 from django.contrib import admin, messages
 from django.utils.translation import gettext_lazy as _
 
+from .errors import InvalidArguments
+from .memory import clean_preference
 from .scopes import normalize_scopes
 
 
@@ -110,9 +112,6 @@ class ApiTokenAdmin(admin.ModelAdmin):
 
 class McpUserMemoryForm(forms.ModelForm):
     def clean(self):
-        from .errors import InvalidArguments
-        from .memory import clean_preference
-
         cleaned = super().clean()
         if cleaned.get("kind") == "preference" and cleaned.get("key"):
             try:
