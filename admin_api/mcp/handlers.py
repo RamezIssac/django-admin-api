@@ -18,7 +18,7 @@ from ..errors import InvalidArguments, NotFound, PermissionDeniedError
 from ..nested import ModelPath
 from ..writes import ValidationFailed
 from . import confirm
-from .resolve import MAX_LIMIT, MAX_TERMS, resolve_entities
+from .resolve import DEFAULT_LIMIT, MAX_LIMIT, MAX_TERMS, resolve_entities
 from .tools import (
     ANY_OBJECT,
     CONFIRM_TOKEN_ARG,
@@ -555,7 +555,7 @@ TOOLS = [
                     "items": {"type": "string"},
                     "description": "Default 'models' for every term without its own 'models' or 'for_field'.",
                 },
-                "limit": {"type": "integer", "minimum": 1, "maximum": MAX_LIMIT, "default": 5},
+                "limit": {"type": "integer", "minimum": 1, "maximum": MAX_LIMIT, "default": DEFAULT_LIMIT},
             },
             ["terms"],
         ),
