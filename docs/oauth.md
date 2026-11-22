@@ -8,9 +8,10 @@ This page adds OAuth 2.1 with [django-oauth-toolkit](https://django-oauth-toolki
 Code or any MCP client signs the user in through your Django login. Then it calls `/mcp/` with an
 OAuth access token, and the server acts as that user.
 
-Everything below was run against the library's test project with django-oauth-toolkit 3.4.1 and
-Django 5.2. The run covered client registration, sign-in with PKCE, the token exchange and the
-`/mcp/` calls.
+The example was run against the library's test project with django-oauth-toolkit 3.4.1 and
+Django 5.2: DCR registration, consent with PKCE S256 and `resource`, the token exchange and the
+`/mcp/` calls. Not run: CIMD, the loopback redirect, a pre-registered client, the login page and
+a reverse proxy.
 
 ## Who does what
 
@@ -164,8 +165,8 @@ What each part does:
 - `verify_request` checks the token in DOT: it exists, has not expired, its application is
   usable, and, for a token issued with a `resource` (RFC 8707), that the request URL falls under
   that resource.
-- A token without a `resource` falls through to `401`. Claude always sends `resource`, so every
-  token Claude holds names this server as its audience.
+- A token without a `resource` falls through to `401`. Claude sends `resource` on every
+  authorization and token request.
 - The token's OAuth scopes become library scopes on `request.api_token`. A token with no scopes
   gets `403 insufficient_scope`, not the user's full permissions.
 - The confirm token and the audit log see `oauth:<access token id>`.
@@ -208,7 +209,7 @@ login can set `LOGIN_URL = "admin:login"`.
 
 ## 4. Scopes
 
-OAuth scope strings are library scopes. `*`, `.` and `:` are legal in OAuth scope names, so
+OAuth scope strings are library scopes. `*`, `.` and `:` are legal in OAuth scope names, and
 `store.*:view` passes through unchanged. The rules are the token rules from
 [Connect Claude Code](connect-claude-code.md#create-tokens): `change` implies `view`, and a scope
 never grants more than the user's admin permissions.
@@ -223,7 +224,7 @@ Coarse scope names such as `erp:read` work too: map them to library scopes in
 
 A tool call outside the token's scopes returns a tool result with
 `{"error": "permission_denied", "status": 403}`. The HTTP status is 200, as for every tool error,
-so it does not trigger an OAuth step-up.
+and Claude gets no OAuth step-up challenge.
 
 ## 5. What Claude expects
 
