@@ -567,3 +567,12 @@ def test_rest_log_entries_keep_the_structured_message(client, superuser, ahmed):
     assert resp.status_code == 201
     entry = LogEntry.objects.get(object_id=str(json.loads(resp.content)["pk"]))
     assert json.loads(entry.change_message) == [{"added": {}}]
+
+
+@pytest.mark.parametrize("slug", ["S-9", "X-1"])  # valid and invalid dry runs
+def test_is_dry_run_is_false_again_after_a_dry_run(rf, superuser, ahmed, slug):
+    request = rf.post("/mcp/")
+    request.user = superuser
+    args = {"model": "testapp.sales", "data": {"slug": slug, "client": ahmed.pk}, "dry_run": True}
+    assert not AdminMcpSite(api_site).call_tool(request, "create_object", args).is_error
+    assert request.is_dry_run is False
