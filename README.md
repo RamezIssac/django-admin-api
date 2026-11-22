@@ -166,31 +166,26 @@ still accepted as aliases of `id` and `ids` for one release. A `list_objects` se
 nothing returns `searched_fields`, `id_filters` (e.g. `client__id__exact`) and a `hint` to filter
 by a resolved ID.
 
-### Per-user memory: audience and language
+### Per-user instructions
 
-Each user can keep preferences in `McpUserMemory` (app `admin_api`, migration `0003`): ask the
-agent ("answer me in Arabic") and it calls the `set_preference` tool, or edit the rows in the
-Django admin (users see their own rows, superusers everyone's).
+An admin can write instructions for one user in `McpUserInstructions` (app `admin_api`, migration
+`0003`, edited in the Django admin under "MCP user instructions"). They are added after the site's
+instructions each time the user connects, for example "Answer in Arabic." or "I am a developer:
+model paths, field names and IDs are fine." The whole text is cut at
+`AdminMcpSite.instructions_max_length` (4,096 characters) with a note saying so.
 
-| Key | Values | Effect |
-|---|---|---|
-| `audience` | `business` (default), `developer` | `developer` swaps the business-wording paragraph of the instructions for one allowing model paths, field names and IDs |
-| `language` | a `settings.LANGUAGES` code | tool calls run under `translation.override(language)`: verbose names, Django's validation messages, library messages; the instructions gain "Answer the user in Arabic." |
-| `notes` | up to 500 characters | appended to the instructions as the user's own notes |
-
-The memory is loaded once per request (`request.mcp_memory`) and read by two hooks on
-`AdminMcpSite`, which a subclass can override:
+Two hooks on `AdminMcpSite` adapt this per request:
 
 ```python
 class ErpMcpSite(AdminMcpSite):
     def get_instructions(self, request):   # sent at initialize
         return super().get_instructions(request) + "\nThe fiscal year starts in July."
 
-    def get_language(self, request):       # tool calls and tool lists run in it
-        return super().get_language(request) or "ar"
+    def get_language(self, request):       # tool calls and tool lists run in it; default None
+        return "ar"                        # None keeps the active language (LocaleMiddleware)
 ```
 
-A new language applies from the next tool call; audience and notes from the next connection.
+New instructions apply from the user's next connection.
 
 ### Resolving names
 
