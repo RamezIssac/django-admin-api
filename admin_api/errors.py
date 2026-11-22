@@ -47,6 +47,7 @@ class PermissionDeniedError(ApiError):
 class NotFound(ApiError):
     status = 404
     code = "not_found"
+    default_detail = gettext_noop("This kind of record is not available here.")
 
 
 class MethodNotAllowed(ApiError):

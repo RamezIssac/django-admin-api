@@ -18,7 +18,6 @@ from django.core.exceptions import FieldDoesNotExist
 from django.db import models
 from django.db.models import Q
 from django.utils import translation
-from django.utils.translation import gettext
 
 from .. import scopes
 from ..detail import inline_prefixes
@@ -159,11 +158,11 @@ def for_field_target(targets: dict[str, Target], request, for_field) -> Target:
         raise InvalidArguments("'for_field' must be an object with 'model' and 'field'.")
     source = targets.get(for_field["model"])
     if source is None:
-        raise NotFound(gettext("This kind of record is not available here."))
+        raise NotFound()
     form_field = _form_field(source, request, str(for_field["field"]))
     related = targets.get(form_field.queryset.model._meta.label_lower)
     if related is None:
-        raise NotFound(gettext("This kind of record is not available here."))
+        raise NotFound()
     limit = form_field.get_limit_choices_to()
     queryset = related.queryset.complex_filter(limit) if limit else related.queryset
     return replace(related, queryset=queryset, to_field=form_field.to_field_name)
