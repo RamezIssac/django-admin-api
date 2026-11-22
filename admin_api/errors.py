@@ -8,6 +8,7 @@ class ApiError(Exception):
     status = 400
     code = "bad_request"
     default_detail: str | None = None  # a gettext_lazy string, translated when raised
+    hint_capabilities = False  # a denial the user's list of models and permissions explains
 
     def __init__(self, detail: str | None = None, *, status: int | None = None, code: str | None = None, **extra):
         if detail is None and self.default_detail:
@@ -42,6 +43,7 @@ class PermissionDeniedError(ApiError):
     status = 403
     code = "permission_denied"
     default_detail = gettext_lazy("You do not have permission to do this.")
+    hint_capabilities = True
 
 
 class NotFound(ApiError):

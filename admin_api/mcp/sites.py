@@ -256,7 +256,10 @@ class AdminMcpSite:
         try:
             return ToolResult(tool.handler(self, request, arguments or {}))
         except ApiError as exc:
-            return ToolResult(_error(exc), is_error=True)
+            payload = _error(exc)
+            if exc.hint_capabilities:
+                payload["help"] = gettext("Call list_models to see what you may do on each model.")
+            return ToolResult(payload, is_error=True)
         except Exception:
             logger.exception("MCP tool %s failed", name)
             return ToolResult({"error": "server_error", "detail": "The tool failed; see the server log."}, True)

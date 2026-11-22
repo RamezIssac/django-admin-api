@@ -134,8 +134,8 @@ one tool per view published with `mcp_tool=`. A `read_only=True` site lists only
 Ask in plain words. Claude Code calls the tools and asks you before the first use of each.
 
 1. "List the models I can use on the erp server."
-   It calls `list_models`, which shows each model with your `view`, `add`, `change` and
-   `delete` rights.
+   It calls `list_models`, which shows each model with what you may do on it: `can` (`view`,
+   `add`, `change`, `delete`), the admin `actions` and the custom `views`.
 2. "Show the five newest sales." It calls `describe_model` for the filters and columns, then
    `list_objects` and `get_object`.
 3. "Create a client named Zeta. Run it as a dry run first." It calls `create_object` with
@@ -160,7 +160,7 @@ tools.
 | Symptom | Cause and fix |
 | --- | --- |
 | `claude mcp list` does not show `Connected`, or a call returns 401 `invalid_token` | The token is wrong, revoked or expired, or the header is missing. The raw token cannot be recovered: create a new one. Check the header reads `Authorization: Bearer aapi_...` |
-| 403 `permission_denied` on a tool call | The user or the token scopes do not allow the operation. `list_models` shows the rights per model. Add the scope (for example `--scope store.sales:add`) on a new token |
+| 403 `permission_denied` on a tool call | The user or the token scopes do not allow the operation. The error's `help` points to `list_models`, which shows the rights per model. Add the scope (for example `--scope store.sales:add`) on a new token |
 | 403 `origin_not_allowed` | The request carried a browser `Origin` that is not the server's own host. Add the origin to `CSRF_TRUSTED_ORIGINS`. Claude Code sends no `Origin` |
 | 404 `not_found`, "No API for app.model" | The model has no admin API twin: it is not registered, not exposed, or has `api_enabled = False` or `mcp_enabled = False`. Registering it with `ApiAdminMixin` exposes it |
 | 400 `Invalid HTTP_HOST header` | Add the public host name to `ALLOWED_HOSTS`. Behind a reverse proxy, forward the `Host` header, or set `USE_X_FORWARDED_HOST = True` |

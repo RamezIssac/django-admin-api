@@ -4,7 +4,8 @@ from functools import wraps
 from weakref import WeakSet
 
 from django.contrib import admin
-from django.urls import path
+from django.urls import path, reverse
+from django.utils.translation import gettext
 from django.views.decorators.csrf import csrf_exempt
 
 from .auth import SessionAuthenticator, TokenAuthenticator
@@ -165,8 +166,15 @@ class AdminApiSite:
                 self.authenticate(request)
                 if not self.has_permission(request):
                     raise PermissionDeniedError()
+            except ApiError as exc:  # the index would refuse too: no capabilities hint
+                return exc.as_response()
+            try:
                 return view(request, *args, **kwargs)
             except ApiError as exc:
+                if exc.hint_capabilities:
+                    exc.extra["help"] = gettext("GET %(url)s to see what you may do on each model.") % {
+                        "url": reverse(f"{self.name}:index")
+                    }
                 return exc.as_response()
 
         return inner
