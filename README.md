@@ -138,6 +138,10 @@ models), `get_object`, `create_object` /
 (preview unless `confirm=true`), `run_action`, `run_view` (custom views), plus one tool per view
 published with `mcp_tool=`.
 
+`list_objects` pages through the first `AdminMcpSite.list_max_rows` records of a query (default
+1000, `None` for no cap). A larger query adds a `hint` pointing at reports, filters and search, and
+a page past the cap answers `invalid_arguments` with the same hint.
+
 On the admin: `mcp_description = "…"` (context for the LLM; a string or a callable of the request),
 `mcp_enabled = False` (hide from MCP only). To reuse another attribute, override
 `get_mcp_description(self, request)` (`ApiAdminMixin`):
@@ -181,8 +185,6 @@ class ErpMcpSite(AdminMcpSite):
 ```
 
 A new language applies from the next tool call; audience and notes from the next connection.
-`manage.py prune_mcp_memory` deletes `picked` rows unused for `--days` (default 180) and any
-row past its `expires_at`, in batches of `--batch-size` (default 1000), with `--dry-run`.
 
 ### Resolving names
 

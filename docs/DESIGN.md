@@ -904,8 +904,8 @@ An opt-in app (`INSTALLED_APPS`, label `admin_api_search`) that stores searchabl
 
 ### 14.11 Per-user memory (0.1.0a4)
 
-- **Store.** `admin_api.McpUserMemory`: `user` (FK, CASCADE), `kind` (`preference` | `picked`),
-  `key`, `value` (JSON), `updated`, `expires_at`; unique on `(user, kind, key)`. `admin_api` is
+- **Store.** `admin_api.McpUserMemory`: `user` (FK, CASCADE), `kind` (`preference`),
+  `key`, `value` (JSON), `updated`; unique on `(user, kind, key)`. `admin_api` is
   in the default `excluded_models` and `McpUserMemoryAdmin` has `api_enabled = False`, so no
   generic tool lists or reads it.
 - **Preferences** (`admin_api.memory`): `audience` (`business` default, `developer`), `language`
@@ -920,9 +920,6 @@ An opt-in app (`INSTALLED_APPS`, label `admin_api_search`) that stores searchabl
 - **`set_preference(key, value)`** writes only `request.user`'s preference rows; an empty value
   deletes the row. It is not a write tool (listed on read-only sites). The audit log records
   the tool name only, never the value.
-- **Retention.** `manage.py prune_mcp_memory` deletes `picked` rows not updated for `--days`
-  (180) and every row past `expires_at`, in `--batch-size` batches. `picked` rows are written by
-  the remembered-picks work in `resolve_entities`, which builds on this store.
 - **Admin.** `McpUserMemoryAdmin` is registered next to the token admin; users see and edit
   their own rows, superusers everyone's; preference values are validated in the form.
 - Tests: `tests/test_mcp_memory.py`.

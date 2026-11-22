@@ -79,6 +79,7 @@ class AdminMcpSite:
 
     default_per_page = 25
     confirm_token_max_age = 900  # seconds a dry run's confirm_token stays valid
+    list_max_rows = 1000  # list_objects pages through this many rows of a query; None: no cap
     instructions = DEFAULT_INSTRUCTIONS
     # app labels or "app_label.model_name" that resolve_entities never searches
     excluded_models = ("auth", "sessions", "contenttypes", "admin", "admin_api")
@@ -156,7 +157,7 @@ class AdminMcpSite:
         adjusted to the user's audience, language and notes (see :meth:`get_user_memory`)."""
         memory = self.get_user_memory(request)
         text = self.instructions
-        if memory.audience == DEVELOPER and BUSINESS_WORDING in text:
+        if memory.audience == DEVELOPER:
             text = text.replace(BUSINESS_WORDING, DEVELOPER_WORDING)
         lines = [text]
         if memory.language:

@@ -29,9 +29,6 @@ class UserMemory:
     language: str | None = None
     notes: str = ""
 
-    def as_dict(self) -> dict:
-        return {"audience": self.audience, "language": self.language, "notes": self.notes}
-
 
 def memory_model():
     from .models import McpUserMemory
@@ -48,10 +45,12 @@ def load_user_memory(user) -> UserMemory:
     stored = {}
     for key, value in rows.values_list("key", "value"):
         try:
-            stored[key] = clean_preference(key, value)
+            value = clean_preference(key, value)
         except InvalidArguments:
             continue  # a row edited by hand into an invalid value falls back to the default
-    return UserMemory(**{key: value for key, value in stored.items() if value is not None})
+        if value is not None:
+            stored[key] = value
+    return UserMemory(**stored)
 
 
 def clean_preference(key: str, value):
@@ -75,9 +74,10 @@ def clean_preference(key: str, value):
         except LookupError:
             codes = ", ".join(code for code, _name in settings.LANGUAGES)
             raise InvalidArguments(gettext("Language is one of: %(codes)s.") % {"codes": codes}) from None
-    if len(value.strip()) > NOTES_MAX_LENGTH:
+    value = value.strip()
+    if len(value) > NOTES_MAX_LENGTH:
         raise InvalidArguments(gettext("Notes are at most %(max)d characters.") % {"max": NOTES_MAX_LENGTH})
-    return value.strip() or None
+    return value or None
 
 
 def set_preference(user, key: str, value) -> UserMemory:

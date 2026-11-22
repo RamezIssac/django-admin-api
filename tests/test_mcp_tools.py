@@ -146,6 +146,40 @@ def test_list_objects_columnar_filters_ordering(call, data):
     assert [row[1] for row in out["rows"]] == ["S-3", "S-2"]
 
 
+ROW_CAP_HINT = (
+    "list_objects pages through the first 3 records of a query. For totals, counts or groupings run a report "
+    "(a view under 'views' in list_models); to find records, add filters or search."
+)
+
+
+def test_list_objects_caps_paging_of_a_large_query(call, data, mcp):
+    """Past list_max_rows a query reports only the reachable pages, adds a hint, and refuses deeper pages."""
+    assert AdminMcpSite.list_max_rows == 1000
+    mcp.list_max_rows = 3
+    out, err = call("list_objects", {"model": "testapp.sales", "ordering": "slug", "per_page": 2})
+    assert not err, out
+    assert (out["count"], out["pages"], out["hint"]) == (5, 2, ROW_CAP_HINT)
+    out, err = call("list_objects", {"model": "testapp.sales", "ordering": "slug", "per_page": 2, "page": 2})
+    assert not err and [row[1] for row in out["rows"]] == ["S-3", "S-4"]
+    out, err = call("list_objects", {"model": "testapp.sales", "per_page": 2, "page": 3})
+    assert err and out["error"] == "invalid_arguments" and out["detail"] == ROW_CAP_HINT
+
+    mcp.list_max_rows = 4
+    out, err = call("list_objects", {"model": "testapp.sales", "per_page": 2, "page": 3})
+    assert err and out["error"] == "invalid_arguments"
+    out, err = call("list_objects", {"model": "testapp.sales", "per_page": 4})
+    assert not err and (out["pages"], len(out["rows"])) == (1, 4)
+
+
+def test_list_objects_under_the_row_cap_or_without_one_pages_everything(call, data, mcp):
+    mcp.list_max_rows = 5
+    out, err = call("list_objects", {"model": "testapp.sales", "per_page": 2, "page": 3})
+    assert not err and (out["count"], out["pages"], len(out["rows"])) == (5, 3, 1) and "hint" not in out
+    mcp.list_max_rows = None
+    out, err = call("list_objects", {"model": "testapp.sales", "per_page": 1, "page": 5})
+    assert not err and out["pages"] == 5 and "hint" not in out
+
+
 def test_list_objects_search_and_bad_args(call, data):
     out, _ = call("list_objects", {"model": "testapp.sales", "search": "S-4"})
     assert out["count"] == 1

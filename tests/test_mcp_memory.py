@@ -1,21 +1,20 @@
 """Per-user MCP memory: audience, language and notes feed the instructions and translation hooks."""
 
 import json
-from datetime import timedelta
 from decimal import Decimal
-from io import StringIO
 
 import pytest
+from django.contrib import admin
 from django.contrib.auth import get_user_model
-from django.core.management import call_command
 from django.test import override_settings
-from django.utils import timezone, translation
+from django.utils import translation
 
-from admin_api.admin import McpUserMemoryAdmin
+from admin_api import AdminApiSite
+from admin_api.admin import ApiTokenAdmin, McpUserMemoryAdmin
 from admin_api.mcp import AdminMcpSite
 from admin_api.mcp.sites import BUSINESS_WORDING, DEFAULT_INSTRUCTIONS, DEVELOPER_WORDING
 from admin_api.mcp.views import make_view
-from admin_api.memory import UserMemory, load_user_memory
+from admin_api.memory import UserMemory, load_user_memory, set_preference
 from admin_api.models import ApiToken, McpUserMemory
 from tests.testapp.admin import site as admin_site
 from tests.testapp.models import Client, Sales
@@ -241,24 +240,82 @@ def test_memory_rows_go_with_the_user(superuser):
 
 
 # --------------------------------------------------------------------------------------------
-# retention
+# rows each query reads and writes
 # --------------------------------------------------------------------------------------------
-def test_prune_deletes_old_picks_and_expired_rows(superuser):
-    now = timezone.now()
-    old_pick = McpUserMemory.objects.create(user=superuser, kind="picked", key="ahmed", value={"id": 1})
-    new_pick = McpUserMemory.objects.create(user=superuser, kind="picked", key="sara", value={"id": 2})
-    expired = remember(superuser, "notes", "temporary")
-    kept = remember(superuser, "language", "ar")
-    McpUserMemory.objects.filter(pk=old_pick.pk).update(updated=now - timedelta(days=181))
-    McpUserMemory.objects.filter(pk=kept.pk).update(updated=now - timedelta(days=400))
-    McpUserMemory.objects.filter(pk=expired.pk).update(expires_at=now - timedelta(minutes=1))
+def test_loading_reads_only_the_users_preference_rows(superuser):
+    other = get_user_model().objects.create_superuser("other", "o@x.io", "pw")
+    remember(other, "language", "ar")
+    assert load_user_memory(superuser) == UserMemory()
 
-    out = StringIO()
-    call_command("prune_mcp_memory", "--dry-run", stdout=out)
-    assert out.getvalue().strip() == "2 memory rows would be deleted."
-    assert McpUserMemory.objects.count() == 4
 
-    out = StringIO()
-    call_command("prune_mcp_memory", "--batch-size", "1", stdout=out)
-    assert out.getvalue().splitlines() == ["deleted 1/2", "deleted 2/2", "2 memory rows deleted."]
-    assert set(McpUserMemory.objects.values_list("pk", flat=True)) == {new_pick.pk, kept.pk}
+def test_an_invalid_row_does_not_hide_the_rows_after_it(superuser):
+    remember(superuser, "audience", "wizard")
+    remember(superuser, "language", "de")
+    assert load_user_memory(superuser) == UserMemory(language="de")
+
+
+def test_setting_and_clearing_touch_only_that_preference_row(superuser):
+    other = get_user_model().objects.create_superuser("other", "o@x.io", "pw")
+    remember(other, "audience", "developer")
+    remember(superuser, "audience", "developer")
+    remember(superuser, "language", "de")
+    set_preference(superuser, "audience", None)
+    set_preference(superuser, "notes", "x" * 500)  # the limit itself is allowed
+    rows = McpUserMemory.objects.filter(user=superuser, kind=McpUserMemory.PREFERENCE)
+    assert sorted(rows.values_list("key", flat=True)) == ["language", "notes"]
+    assert McpUserMemory.objects.get(user=other).value == "developer"
+    set_preference(superuser, "audience", "developer")
+    assert rows.get(key="audience").value == "developer"
+
+
+def test_set_preference_checks_the_key_type_and_says_when_it_applies(call):
+    out, err = call("set_preference", {"key": 5, "value": "x"})
+    assert err and out["detail"] == "'key' has the wrong type."
+    out, err = call("set_preference", {"key": "audience", "value": "developer"})
+    assert not err
+    assert out["note"] == "Language applies from the next tool call; audience and notes from the next connection."
+
+
+def test_admin_superuser_sees_and_assigns_every_users_rows(rf, superuser, django_assert_num_queries):
+    clerk = get_user_model().objects.create_user("clerk", "c@x.io", "pw", is_staff=True)
+    rows = [remember(superuser, "notes", "root's"), remember(clerk, "notes", "clerk's")]
+    model_admin = admin_site._registry[McpUserMemory]
+    request = rf.get("/")
+    request.user = superuser
+    with django_assert_num_queries(1):
+        listed = sorted((r.pk, r.user.username) for r in model_admin.get_queryset(request))
+    assert listed == [(rows[0].pk, "root"), (rows[1].pk, "clerk")]
+    assert model_admin.get_fields(request) == ["user", "kind", "key", "value"]
+
+    assigned = McpUserMemory(user=clerk, kind="preference", key="language", value="de")
+    model_admin.save_model(request, assigned, None, False)
+    unassigned = McpUserMemory(kind="preference", key="audience", value="developer")
+    model_admin.save_model(request, unassigned, None, False)
+    request.user = clerk
+    forged = McpUserMemory(user=superuser, kind="preference", key="audience", value="developer")
+    model_admin.save_model(request, forged, None, False)
+    assert (assigned.user, unassigned.user, forged.user) == (clerk, superuser, clerk)
+
+
+def test_admin_form_cleans_the_preference_value(rf, superuser):
+    request = rf.get("/")
+    request.user = superuser
+    form_class = admin_site._registry[McpUserMemory].get_form(request)
+    form = form_class(data={"user": superuser.pk, "kind": "preference", "key": "notes", "value": '"  hi  "'})
+    assert form.is_valid(), form.errors
+    assert form.cleaned_data["value"] == "hi"
+
+
+def test_api_site_registers_its_admins_once():
+    fresh = admin.AdminSite(name="memory_fresh")
+    AdminApiSite(fresh, name="memory_fresh_api")
+    assert isinstance(fresh._registry[McpUserMemory], McpUserMemoryAdmin)
+    assert isinstance(fresh._registry[ApiToken], ApiTokenAdmin)
+
+    class OwnMemoryAdmin(admin.ModelAdmin):
+        pass
+
+    own = admin.AdminSite(name="memory_own")
+    own.register(McpUserMemory, OwnMemoryAdmin)
+    AdminApiSite(own, name="memory_own_api")
+    assert type(own._registry[McpUserMemory]) is OwnMemoryAdmin

@@ -18,6 +18,7 @@ from __future__ import annotations
 import re
 
 from django.core.exceptions import ValidationError
+from django.utils.translation import gettext, gettext_noop
 
 OPS = ("view", "add", "change", "delete")
 _SCOPE_RE = re.compile(r"^(\*|[a-z_][a-z0-9_]*)\.(\*|[a-z_][a-z0-9_]*):(\*|view|add|change|delete)$")
@@ -83,21 +84,21 @@ def request_allows(request, opts, op: str) -> bool:
     return scopes_allow(scopes, opts.app_label, opts.model_name, op)
 
 
-def check(request, opts, op: str):
-    from django.utils.translation import gettext
+VERBS = {
+    "view": gettext_noop("view"),
+    "add": gettext_noop("add"),
+    "change": gettext_noop("change"),
+    "delete": gettext_noop("delete"),
+}
 
+
+def check(request, opts, op: str):
     from .errors import PermissionDeniedError
 
     if not request_allows(request, opts, op):
-        verbs = {
-            "view": gettext("view"),
-            "add": gettext("add"),
-            "change": gettext("change"),
-            "delete": gettext("delete"),
-        }
         raise PermissionDeniedError(
             gettext("This connection may not %(op)s %(models)s.")
-            % {"op": verbs.get(op, op), "models": opts.verbose_name_plural}
+            % {"op": gettext(VERBS.get(op, op)), "models": opts.verbose_name_plural}
         )
 
 
