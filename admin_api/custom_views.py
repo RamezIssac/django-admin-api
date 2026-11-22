@@ -37,6 +37,7 @@ from django.core.exceptions import PermissionDenied as DjangoPermissionDenied
 from django.db import router, transaction
 from django.http import HttpResponseBase, QueryDict
 from django.utils.dateparse import parse_date, parse_datetime, parse_time
+from django.utils.translation import gettext
 
 from . import scopes
 from .encoders import encode_value
@@ -250,7 +251,10 @@ def available_views(model_admin, request, *, mcp: bool = False, read_only: bool 
 def get_view(model_admin, request, name: str, *, mcp: bool = False, read_only: bool = False) -> ViewSpec:
     spec = declared_views(model_admin).get(name)
     if spec is None or not spec.api_enabled or (mcp and not spec.mcp_enabled) or (read_only and spec.writes):
-        raise NotFound(f"No view {name!r} on {model_admin.opts.app_label}.{model_admin.opts.model_name}.")
+        raise NotFound(
+            gettext("No view '%(view)s' on %(models)s.")
+            % {"view": name, "models": model_admin.opts.verbose_name_plural}
+        )
     return spec
 
 
@@ -384,16 +388,18 @@ def view_object(model_admin, request, spec: ViewSpec, object_id):
 
     if spec.detail:
         if object_id is None:
-            raise InvalidParams(f"View {spec.name!r} runs on one object: give its pk.")
+            raise InvalidParams(gettext("View '%(view)s' runs on one record: give its ID.") % {"view": spec.name})
         return get_object(model_admin, request, object_id)
     if object_id is not None:
-        raise InvalidParams(f"View {spec.name!r} does not run on an object: no pk expected.")
+        raise InvalidParams(
+            gettext("View '%(view)s' does not run on one record: no ID expected.") % {"view": spec.name}
+        )
     return None
 
 
 def check_view_permission(model_admin, request, spec: ViewSpec, obj=None) -> None:
     if not has_view_permission(model_admin, request, spec, obj):
-        raise PermissionDeniedError()
+        raise PermissionDeniedError(gettext("You may not run the view '%(view)s'.") % {"view": spec.name})
     for op in scope_ops(spec):  # second line of defense, like the other services
         scopes.check(request, model_admin.opts, op)
 

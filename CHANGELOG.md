@@ -9,6 +9,7 @@
   `models` (a top-level `models` is the default for terms without their own), and `for_field` (a create/update relation field or `inlines.<prefix>.<field>`, with the
   field's `limit_choices_to`). Candidates come from each admin's `get_search_results` over its
   `get_queryset(request)`, with its permissions, token scopes and live search fields.
+  The `objects` list names `searched_models` only when its status is `none` or with `verbose=true`.
 - `AdminMcpSite.excluded_models` (and the `excluded_models=` argument): app labels or
   `app_label.model_name` that `resolve_entities` never searches. Default: `auth`, `sessions`,
   `contenttypes`, `admin`, `admin_api`.
@@ -17,6 +18,35 @@
 - The default MCP instructions gain line 6: resolve names with `resolve_entities` first; reads use
   any `unique` result, writes only an `exact` or `exact_code` one, `ambiguous` and `none` ask.
 - `InvalidArguments` moved to `admin_api.errors`; `admin_api.mcp.handlers` still imports it.
+- **MCP answers in business wording.** The default instructions open with "This server gives you
+  the user's business records and documents" and gain a paragraph asking the agent to name kinds
+  of records by `name` / `name_plural`, records by their label, and to say "ID" only when needed.
+  Line 6 now asks to list each ambiguous candidate's label and the kind of record, and to pass
+  resolved IDs as describe_model's filter for that kind of record (e.g. `client`), not as `search`
+  text.
+- The default MCP instructions are 2,035 characters (were 2,540 after the lines above), same rules.
+  An `ambiguous` resolve now says to ask which one before running anything, not to run once per
+  candidate.
+- MCP `list_objects` with a `search` that finds nothing adds `searched_fields` (the admin's search
+  fields), `id_filters` (the `list_filter` parameters that take a related record's ID, e.g.
+  `client__id__exact`) and a `hint`.
+- **MCP keys are `id` and `label`** (REST unchanged): object heads, inline rows, related records
+  (`{"id", "label"}`), `list_objects` `columns[0]`, write results, delete previews, view results;
+  `describe_model` `pk_field` is now `id_field`. `list_models` items start with `name`. The tool
+  arguments are `id` and `ids`; `pk` and `pks` stay accepted as aliases for one release. An inline
+  row sent with `id` updates that row, and `describe_model`'s update schema names that key `id`.
+- Messages use verbose names and "ID", wrapped in `gettext`: `"No sales with ID 9."`,
+  `"This connection may not change sales."`, `"No view 'x' on sales."`, notes say "the ID shown
+  is provisional". Unknown, hidden and excluded models all answer `"This kind of record is not
+  available here."` (was `No API for app.model` / `No MCP access to app.model`).
+- `import admin_api` works without Django settings: the scope verbs and error default details are
+  `gettext_lazy` strings.
+- `PermissionDeniedError` has a default detail ("You do not have permission to do this."); the
+  services pass one per operation (`"You may not change this sales."`). Promoted view tools say
+  "(Same as run_view 'post' on sales.)" and "ID of the sales.".
+- `AdminMcpSite.get_instructions(request)` (sent at `initialize`; the HTTP view builds one SDK
+  `Server` per request) and `AdminMcpSite.get_language(request)` (default `None`: keep the active
+  language), which wraps `call_tool` and `get_tools` in `translation.override`.
 - **New opt-in app `admin_api.contrib.search`** (§14.10): a search index behind `resolve_entities`.
   One row per (object, search field) and per (model, label, language), text folded by `fold()`
   (accents, case, Arabic letter variants, digits, the Arabic article). Rows follow the MCP-exposed

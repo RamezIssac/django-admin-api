@@ -8,9 +8,12 @@ from __future__ import annotations
 
 import copy
 
+from django.contrib.admin.utils import NotRelationField, get_fields_from_path
 from django.contrib.admin.views.main import ORDER_VAR, PAGE_VAR, SEARCH_VAR
+from django.core.exceptions import FieldDoesNotExist
 from django.db import router, transaction
 from django.http import QueryDict
+from django.utils.translation import gettext
 
 from .. import custom_views, services
 from ..changelist import PER_PAGE_PARAM, SHAPE_PARAM, describe_columns, get_columns
@@ -25,9 +28,10 @@ from .tools import (
     DATA_ARG,
     DRY_RUN_ARG,
     FILTERS_ARG,
+    ID_ARG,
     MODEL_ARG,
     PARENTS_ARG,
-    PK_ARG,
+    PK_ALIAS_ARG,
     ToolSpec,
     obj,
 )
@@ -49,16 +53,63 @@ def _arg(args: dict, name: str, types=None, *, required=True, default=None):
     return value
 
 
+def _id_arg(args: dict, *, required=True):
+    """The record ID argument: ``id``, or its deprecated alias ``pk``."""
+    value = _arg({"id": args.get("id", args.get("pk"))}, "id", (int, str), required=required)
+    if isinstance(value, bool):
+        raise InvalidArguments("'id' has the wrong type.")
+    return value
+
+
+def mcp_keys(value):
+    """REST keys to MCP keys: a record reference ``{"pk", "str"}`` becomes ``{"id", "label"}``, anywhere."""
+    if isinstance(value, list):
+        return [mcp_keys(v) for v in value]
+    if isinstance(value, dict):
+        if value.keys() == {"pk", "str"}:
+            return {"id": value["pk"], "label": value["str"]}
+        return {k: mcp_keys(v) for k, v in value.items()}
+    return value
+
+
+def _object_keys(data: dict) -> dict:
+    """A serialized object for MCP: ``id`` and ``label`` first, inline rows keyed by ``id``."""
+    out = {"id": data.pop("pk")}
+    if "str" in data:
+        out["label"] = data.pop("str")
+    out.update(mcp_keys(data))
+    for prefix, rows in out.get("inlines", {}).items():
+        out["inlines"][prefix] = [{"id": row.pop("pk"), **row} if "pk" in row else row for row in rows]
+    return out
+
+
+def _input_row(row):
+    if not isinstance(row, dict) or "id" not in row or "pk" in row:
+        return row
+    row = dict(row)
+    row["pk"] = row.pop("id")
+    return row
+
+
+def _input_data(data: dict) -> dict:
+    """MCP write data for the services: an inline row's ``id`` is the row's ``pk``."""
+    inlines = data.get("inlines")
+    if not isinstance(inlines, dict):
+        return data
+    rows = {prefix: [_input_row(r) for r in rs] if isinstance(rs, list) else rs for prefix, rs in inlines.items()}
+    return {**data, "inlines": rows}
+
+
 def _model_admin(site, request, args):
     """The admin for ``model`` (a model path) inside ``parents``. Hiding an admin from MCP hides
     the admins nested under it too."""
     path = ModelPath.parse(_arg(args, "model", str))
     parents = _arg(args, "parents", list, required=False, default=[])
     if any(not isinstance(pk, (int, str)) or isinstance(pk, bool) for pk in parents):
-        raise InvalidArguments("'parents' must be a list of primary keys.")
+        raise InvalidArguments("'parents' must be a list of IDs.")
     chain = site.api_site.get_admin_chain(path)
     if chain is not None and not all(site.is_exposed(a) for a in chain):
-        raise NotFound(f"No MCP access to {path.label}.")
+        raise NotFound()
     model_admin = services.get_model_admin_by_label(site.api_site, request, path.label, parents)
     return model_admin, path.label
 
@@ -116,6 +167,34 @@ def _ordering_param(model_admin, request, ordering) -> str:
     return ".".join(parts)
 
 
+def _id_filters(model_admin, request) -> list:
+    """The changelist parameters that take a related record's ID, as Django's RelatedFieldListFilter names them."""
+    out = []
+    for entry in model_admin.get_list_filter(request):
+        path = entry[0] if isinstance(entry, (list, tuple)) else entry
+        if not isinstance(path, str):
+            continue  # a SimpleListFilter class
+        try:
+            field = get_fields_from_path(model_admin.model, path)[-1]
+        except (FieldDoesNotExist, NotRelationField):
+            continue
+        if field.is_relation and getattr(field, "target_field", None) is not None:
+            out.append(f"{path}__{field.target_field.name}__exact")
+    return out
+
+
+def _empty_search_hint(model_admin, request) -> dict:
+    """For a search that found nothing: the fields it looked at and the filters that take a related record's ID."""
+    return {
+        "searched_fields": list(model_admin.get_search_fields(request) or ()),
+        "id_filters": _id_filters(model_admin, request),
+        "hint": gettext(
+            "Nothing matched the search text in these fields. To find records of a related record, "
+            "resolve it with resolve_entities and pass its ID to one of these filters."
+        ),
+    }
+
+
 def _ensure_writable(site):
     if site.read_only:
         raise PermissionDeniedError("This MCP server is read-only.", code="read_only")
@@ -124,7 +203,7 @@ def _ensure_writable(site):
 def _write_result(data: dict) -> dict:
     messages = data.pop("messages", None)
     totals = data.pop("totals", None)
-    out = {"object": data}
+    out = {"object": _object_keys(data)}
     if totals:
         out["totals"] = totals
     if messages:
@@ -140,12 +219,12 @@ def _dry_run(model_admin, request, fn) -> dict:
             try:
                 out = {"dry_run": True, "valid": True, **_write_result(fn())}
             except ValidationFailed as exc:
-                out = {"dry_run": True, "valid": False, "errors": exc.extra}
+                out = {"dry_run": True, "valid": False, "errors": mcp_keys(exc.extra)}
             transaction.set_rollback(True)
     finally:
         request.is_dry_run = False
     if out["valid"]:
-        out["note"] = "Nothing was saved; the pk shown is provisional."
+        out["note"] = gettext("Nothing was saved; the ID shown is provisional.")
     return out
 
 
@@ -157,8 +236,8 @@ def _write_scope(request, **arguments) -> dict:
 
 def _issue_confirm_token(site, request, out: dict, operation: str, scope: dict, state) -> dict:
     out["confirm_token"] = confirm.issue(site, request, operation, scope, state)
-    out["note"] = (
-        "Nothing was saved; the pk shown is provisional. To save, repeat the call without dry_run "
+    out["note"] = gettext(
+        "Nothing was saved; the ID shown is provisional. To save, repeat the call without dry_run "
         "and pass this confirm_token."
     )
     return out
@@ -216,7 +295,7 @@ def execute_view(site, request, model_admin, name, *, pk=None, params=None, dry_
     """Run a custom view for MCP (``run_view`` and the promoted view tools)."""
     spec = custom_views.get_view(model_admin, request, name, mcp=True, read_only=site.read_only)
     if not site.is_view_exposed(model_admin, spec):
-        raise NotFound(f"No view {name!r}.")
+        raise NotFound(gettext("No view '%(view)s'.") % {"view": name})
     if params is not None and not isinstance(params, dict):
         raise InvalidArguments("'params' must be an object.")
 
@@ -225,7 +304,10 @@ def execute_view(site, request, model_admin, name, *, pk=None, params=None, dry_
     custom_views.check_view_permission(model_admin, request, spec, obj)
 
     def run():
-        return services.run_view(model_admin, request, name, object_id=pk, data=params or {}, obj=obj)
+        out = mcp_keys(services.run_view(model_admin, request, name, object_id=pk, data=params or {}, obj=obj))
+        if "pk" in out:
+            out["id"] = out.pop("pk")
+        return out
 
     gated = spec.writes and site.requires_dry_run(model_admin)
     scope = _write_scope(request, view=name, pk=None if pk is None else str(pk), params=params or {})
@@ -234,12 +316,12 @@ def execute_view(site, request, model_admin, name, *, pk=None, params=None, dry_
             return _confirmed_write(site, request, model_admin, confirm_token, "run_view", scope, obj, run)
         return run()
     if not spec.writes:
-        return {**run(), "dry_run": True, "note": "A read-only view; nothing to roll back."}
+        return {**run(), "dry_run": True, "note": gettext("A read-only view; nothing to roll back.")}
     state = confirm.object_state(obj) if gated else None
     request.is_dry_run = True
     try:
         with transaction.atomic(using=router.db_for_write(model_admin.model)):
-            out = {**run(), "dry_run": True, "note": "Nothing was saved: the view ran and was rolled back."}
+            out = {**run(), "dry_run": True, "note": gettext("Nothing was saved: the view ran and was rolled back.")}
             transaction.set_rollback(True)
     finally:
         request.is_dry_run = False
@@ -259,9 +341,9 @@ def list_models(site, request, args) -> dict:
             if chain is None or not all(site.is_exposed(a) for a in chain):
                 continue
             item = {
-                "model": path.label,
                 "name": entry["name"],
                 "name_plural": entry["name_plural"],
+                "model": path.label,
                 "app": app["name"],
                 "perms": _effective_perms(site, entry["perms"]),
             }
@@ -282,19 +364,18 @@ def describe_model(site, request, args) -> dict:
     from ..jsonschema import input_schemas
 
     model_admin, label = _model_admin(site, request, args)
-    pk = _arg(args, "pk", (int, str), required=False)
+    pk = _id_arg(args, required=False)
     instance = None
     if pk is not None:
         instance = services.get_object(model_admin, request, pk)
-        if not model_admin.has_view_or_change_permission(request, instance):
-            raise PermissionDeniedError()
+        services.check_view_permission(model_admin, request, instance)
 
     schema = services.schema(site.api_site, model_admin, _with_query(request, QueryDict(mutable=True)))
     out = {
-        "model": label,
         "name": schema["model"]["name"],
         "name_plural": schema["model"]["name_plural"],
-        "pk_field": schema["model"]["pk"],
+        "model": label,
+        "id_field": schema["model"]["pk"],
         "perms": _effective_perms(site, schema["perms"]),
         "columns": [
             {k: c[k] for k in ("name", "label", "type", "sortable", "choices") if k in c} for c in schema["columns"]
@@ -325,7 +406,7 @@ def describe_model(site, request, args) -> dict:
         out["input_schema"] = {"create": None, "update": None}
     else:
         out["actions"] = schema["actions"]
-        out["input_schema"] = input_schemas(model_admin, request, instance)
+        out["input_schema"] = input_schemas(model_admin, request, instance, row_id="id")
     views = _views(site, request, model_admin)
     if instance is not None:
         views = [
@@ -356,14 +437,18 @@ def list_objects(site, request, args) -> dict:
     head = {"model": label}
     if request.admin_api_target.parents:
         head["parents"] = request.admin_api_target.parents
+    data["columns"] = ["id", *data["columns"][1:]]
+    data["rows"] = mcp_keys(data["rows"])
+    if search and data["count"] == 0:
+        data.update(_empty_search_hint(model_admin, request))
     return {**head, **data}
 
 
 def get_object(site, request, args) -> dict:
     model_admin, _label = _model_admin(site, request, args)
-    data = services.detail(model_admin, request, _arg(args, "pk", (int, str)))
+    data = _object_keys(services.detail(model_admin, request, _id_arg(args)))
     data.pop("children", None)  # REST urls; MCP addresses children by model path + parents
-    children = _children(site, request, model_admin, data["pk"])
+    children = _children(site, request, model_admin, data["id"])
     if children:
         data["children"] = {c["segment"]: {"model": c["model"], "parents": c["parents"]} for c in children}
     # REST gives urls; MCP gives the names of the detail views (run them with run_view)
@@ -383,7 +468,7 @@ def get_object(site, request, args) -> dict:
 def create_object(site, request, args) -> dict:
     _ensure_writable(site)
     model_admin, _label = _model_admin(site, request, args)
-    data = _arg(args, "data", dict)
+    data = _input_data(_arg(args, "data", dict))
     services.check_add_permission(model_admin, request)
     return _guarded_write(
         site,
@@ -399,8 +484,8 @@ def create_object(site, request, args) -> dict:
 def update_object(site, request, args) -> dict:
     _ensure_writable(site)
     model_admin, _label = _model_admin(site, request, args)
-    pk = _arg(args, "pk", (int, str))
-    data = _arg(args, "data", dict)
+    pk = _id_arg(args)
+    data = _input_data(_arg(args, "data", dict))
     obj = services.get_object(model_admin, request, pk)
     services.check_change_permission(model_admin, request, obj)
     return _guarded_write(
@@ -418,16 +503,16 @@ def update_object(site, request, args) -> dict:
 def delete_object(site, request, args) -> dict:
     _ensure_writable(site)
     model_admin, _label = _model_admin(site, request, args)
-    pk = _arg(args, "pk", (int, str))
+    pk = _id_arg(args)
     if not _arg(args, "confirm", bool, required=False, default=False):
         preview = services.delete_preview(model_admin, request, pk)
         return {
             "deleted": False,
             "confirm_required": True,
-            "preview": preview,
-            "note": "Nothing was deleted. Call again with confirm=true to delete.",
+            "preview": mcp_keys(preview),
+            "note": gettext("Nothing was deleted. Call again with confirm=true to delete."),
         }
-    return {"deleted": True, "object": services.delete(model_admin, request, pk)["deleted"]}
+    return {"deleted": True, "object": mcp_keys(services.delete(model_admin, request, pk)["deleted"])}
 
 
 def run_action(site, request, args) -> dict:
@@ -438,8 +523,8 @@ def run_action(site, request, args) -> dict:
     if _arg(args, "all", bool, required=False, default=False):
         payload["all"] = True
     else:
-        payload["pks"] = _arg(args, "pks", list, required=False, default=[])
-    return services.run_action(model_admin, _with_query(request, _filters_query(args)), action, payload)
+        payload["pks"] = _arg({"ids": args.get("ids", args.get("pks"))}, "ids", list, required=False, default=[])
+    return mcp_keys(services.run_action(model_admin, _with_query(request, _filters_query(args)), action, payload))
 
 
 def run_view(site, request, args) -> dict:
@@ -449,7 +534,7 @@ def run_view(site, request, args) -> dict:
         request,
         model_admin,
         _arg(args, "view", str),
-        pk=_arg(args, "pk", (int, str), required=False),
+        pk=_id_arg(args, required=False),
         params=_arg(args, "params", dict, required=False, default={}),
         dry_run=_arg(args, "dry_run", bool, required=False, default=False),
         confirm_token=args.get("confirm_token"),
@@ -475,9 +560,9 @@ TOOLS = [
         name="describe_model",
         title="Describe a model",
         description="Columns, filters, search, actions and the JSON Schema of the data accepted by "
-        "create_object/update_object. Call this before listing with filters or writing. Pass pk to get the "
-        "update schema for one object (some fields may be read-only per object).",
-        input_schema=obj({"model": MODEL_ARG, "parents": PARENTS_ARG, "pk": PK_ARG}, ["model"]),
+        "create_object/update_object. Call this before listing with filters or writing. Pass id to get the "
+        "update schema for one record (some fields may be read-only per record).",
+        input_schema=obj({"model": MODEL_ARG, "parents": PARENTS_ARG, "id": ID_ARG, "pk": PK_ALIAS_ARG}, ["model"]),
         output_schema=ANY_OBJECT,
         handler=describe_model,
         annotations=READ,
@@ -486,7 +571,9 @@ TOOLS = [
         name="list_objects",
         title="List objects",
         description="List objects the way the admin changelist does: filters, search, ordering and paging. "
-        "Returns columnar data: 'columns' names each position in every 'rows' entry.",
+        "A search that finds nothing returns the fields it searched and the filters that take a related ID. "
+        "Returns columnar data: 'columns' names each position in every 'rows' entry; the first is the record 'id', "
+        "and a related record is {'id', 'label'}.",
         input_schema=obj(
             {
                 "model": MODEL_ARG,
@@ -556,6 +643,11 @@ TOOLS = [
                     "description": "Default 'models' for every term without its own 'models' or 'for_field'.",
                 },
                 "limit": {"type": "integer", "minimum": 1, "maximum": MAX_LIMIT, "default": DEFAULT_LIMIT},
+                "verbose": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Also list the models searched when objects were found ('none' always lists them).",
+                },
             },
             ["terms"],
         ),
@@ -566,8 +658,8 @@ TOOLS = [
     ToolSpec(
         name="get_object",
         title="Get one object",
-        description="All fields of one object, including its inline rows.",
-        input_schema=obj({"model": MODEL_ARG, "parents": PARENTS_ARG, "pk": PK_ARG}, ["model", "pk"]),
+        description="All fields of one record ('id', 'label', then the fields), including its inline rows.",
+        input_schema=obj({"model": MODEL_ARG, "parents": PARENTS_ARG, "id": ID_ARG, "pk": PK_ALIAS_ARG}, ["model"]),
         output_schema=ANY_OBJECT,
         handler=get_object,
         annotations=READ,
@@ -598,19 +690,20 @@ TOOLS = [
         name="update_object",
         title="Update an object",
         description="Change some fields of an object (fields not given are kept). Inline rows: a row with "
-        "'pk' updates that row, '_delete': true deletes it, a row without 'pk' is added. 'data' must match "
+        "'id' updates that row, '_delete': true deletes it, a row without 'id' is added. 'data' must match "
         "describe_model's input_schema.update. Use dry_run=true first to check it. The result carries the "
         "document's computed 'totals' when the admin declares them.",
         input_schema=obj(
             {
                 "model": MODEL_ARG,
                 "parents": PARENTS_ARG,
-                "pk": PK_ARG,
+                "id": ID_ARG,
+                "pk": PK_ALIAS_ARG,
                 "data": DATA_ARG,
                 "dry_run": DRY_RUN_ARG,
                 "confirm_token": CONFIRM_TOKEN_ARG,
             },
-            ["model", "pk", "data"],
+            ["model", "data"],
         ),
         output_schema=ANY_OBJECT,
         handler=update_object,
@@ -626,10 +719,11 @@ TOOLS = [
             {
                 "model": MODEL_ARG,
                 "parents": PARENTS_ARG,
-                "pk": PK_ARG,
+                "id": ID_ARG,
+                "pk": PK_ALIAS_ARG,
                 "confirm": {"type": "boolean", "default": False, "description": "Actually delete."},
             },
-            ["model", "pk"],
+            ["model"],
         ),
         output_schema=ANY_OBJECT,
         handler=delete_object,
@@ -639,14 +733,15 @@ TOOLS = [
     ToolSpec(
         name="run_action",
         title="Run an admin action",
-        description="Run one of the model's admin actions (listed by describe_model) on the given pks, or on "
+        description="Run one of the model's admin actions (listed by describe_model) on the given ids, or on "
         "all objects matching 'filters' with all=true. Actions have no dry run.",
         input_schema=obj(
             {
                 "model": MODEL_ARG,
                 "parents": PARENTS_ARG,
                 "action": {"type": "string", "description": "Action name from describe_model's actions."},
-                "pks": {"type": "array", "items": PK_ARG, "description": "Objects to run the action on."},
+                "ids": {"type": "array", "items": ID_ARG, "description": "IDs of the records to run the action on."},
+                "pks": {"type": "array", "items": ID_ARG, "description": "Deprecated alias of 'ids'."},
                 "all": {"type": "boolean", "default": False, "description": "Run on all objects matching filters."},
                 "filters": FILTERS_ARG,
             },
@@ -662,14 +757,15 @@ TOOLS = [
         title="Run a custom view",
         description="Run one of a model's custom views: reports, statements, computed pages or business "
         "operations. They are listed under 'views' by list_models (names) and describe_model (parameters as "
-        "params_schema). Views with detail=true run on one object (give pk). Views with writes=true change "
+        "params_schema). Views with detail=true run on one record (give id). Views with writes=true change "
         "data: use dry_run=true first to check them.",
         input_schema=obj(
             {
                 "model": MODEL_ARG,
                 "parents": PARENTS_ARG,
                 "view": {"type": "string", "description": "View name from list_models / describe_model."},
-                "pk": {**PK_ARG, "description": "The object, for views with detail=true."},
+                "id": {**ID_ARG, "description": "The record, for views with detail=true."},
+                "pk": PK_ALIAS_ARG,
                 "params": {"type": "object", "description": "Parameters matching the view's params_schema."},
                 "dry_run": {
                     **DRY_RUN_ARG,
@@ -695,27 +791,37 @@ def view_tool(site, model_admin, spec) -> ToolSpec:
     params = spec.params_schema()
     properties = {}
     required = list(params.get("required", ()))
+    # a view param named 'id' keeps its name; the record ID then goes in 'pk'
+    id_name = "id" if "id" not in params["properties"] else "pk"
     if spec.detail:
-        properties["pk"] = {**PK_ARG, "description": f"Primary key of the {opts.verbose_name}."}
-        required.insert(0, "pk")
+        properties[id_name] = {**ID_ARG, "description": gettext("ID of the %(model)s.") % {"model": opts.verbose_name}}
+        if id_name == "id":
+            properties["pk"] = PK_ALIAS_ARG
     properties.update(params["properties"])
     if spec.writes:
         properties["dry_run"] = DRY_RUN_ARG
         properties["confirm_token"] = CONFIRM_TOKEN_ARG
-    description = spec.description or spec.title
-    description += f" (Custom view {spec.name!r} of {label}; same as run_view.)"
+    description = str(spec.description or spec.title)
+    description += " " + gettext("(Same as run_view '%(view)s' on %(models)s.)") % {
+        "view": spec.name,
+        "models": opts.verbose_name_plural,
+    }
+    reserved = custom_views.TOOL_RESERVED | ({"id"} if spec.detail and id_name == "id" else set())
 
     def handler(site, request, args):
         model_admin = services.get_model_admin_by_label(site.api_site, request, label)
         if not site.is_exposed(model_admin):
-            raise NotFound(f"No MCP access to {label}.")
-        params = {k: v for k, v in args.items() if k not in custom_views.TOOL_RESERVED}
+            raise NotFound()
+        params = {k: v for k, v in args.items() if k not in reserved}
+        pk = (args.get("id", args.get("pk")) if id_name == "id" else args.get("pk")) if spec.detail else None
+        if spec.detail and pk is None:
+            raise InvalidArguments(f"'{id_name}' is required.")
         return execute_view(
             site,
             request,
             model_admin,
             spec.name,
-            pk=args.get("pk") if spec.detail else None,
+            pk=pk,
             params=params,
             dry_run=bool(args.get("dry_run")) if spec.writes else False,
             confirm_token=args.get("confirm_token"),

@@ -172,6 +172,15 @@ def test_none(resolve, data):
     assert out["models"]["status"] == "none"
 
 
+def test_searched_models_only_when_none_or_verbose(resolve, data):
+    found = resolve("Alpha")["objects"]
+    assert found["status"] == "ambiguous" and "searched_models" not in found
+    assert resolve("Alpha", verbose=True)["objects"]["searched_models"] == ["testapp.client", "testapp.sales"]
+    assert resolve("egypt")["objects"]["searched_models"] == ["testapp.client", "testapp.sales"]
+    out = resolve("Alpha", verbose="yes")
+    assert out["error"] == "invalid_arguments"
+
+
 def test_scoped_get_queryset_hides_a_row(resolve, data):
     assert Client.objects.filter(name="Bob").exists()
     assert resolve("bob")["objects"]["status"] == "none"
@@ -185,7 +194,7 @@ def test_live_search_fields_twin(resolve, data):
 
 
 def test_no_view_permission_hides_a_model(resolve, data, staff_view_clients):
-    out = resolve("alpha", user=staff_view_clients)
+    out = resolve("alpha", user=staff_view_clients, verbose=True)
     assert out["objects"]["searched_models"] == ["testapp.client"]
     assert ids(out["objects"]) == [("testapp.client", data["clients"]["Alpha"].pk)]
     assert out["objects"]["status"] == "unique"
@@ -193,7 +202,7 @@ def test_no_view_permission_hides_a_model(resolve, data, staff_view_clients):
 
 
 def test_token_scope(resolve, data, superuser):
-    out = resolve("alpha", scopes=["testapp.sales:view"])
+    out = resolve("alpha", scopes=["testapp.sales:view"], verbose=True)
     assert out["objects"]["searched_models"] == ["testapp.sales"]
     assert ids(out["objects"]) == [("testapp.sales", data["sales"]["alpha"].pk)]
     assert resolve({"text": "payment", "kind": "models"}, scopes=["testapp.sales:view"])["models"]["status"] == "none"
@@ -206,7 +215,7 @@ def test_excluded_models(resolve, data):
     open_site = LiveMcpSite(api_site, excluded_models=())
     assert resolve({"text": "root", "kind": "objects"}, site=open_site)["objects"]["candidates"][0]["label"] == "root"
     no_sales = LiveMcpSite(api_site, excluded_models=("auth", "testapp.sales"))
-    assert resolve("alpha", site=no_sales)["objects"]["searched_models"] == ["testapp.client"]
+    assert resolve("alpha", site=no_sales, verbose=True)["objects"]["searched_models"] == ["testapp.client"]
 
 
 def test_hidden_model_answers_like_an_unknown_one(resolve, data):
@@ -223,7 +232,7 @@ def test_hidden_model_answers_like_an_unknown_one(resolve, data):
 
 def test_for_field_with_limit_choices_to(resolve, data):
     field = {"model": "testapp.payment", "field": "client"}
-    out = resolve({"text": "a", "for_field": field}, limit=20)
+    out = resolve({"text": "a", "for_field": field}, limit=20, verbose=True)
     assert "models" not in out
     assert out["objects"]["searched_models"] == ["testapp.client"]
     # Amira has notes (limit_choices_to), Bob is outside ClientAdmin's queryset
@@ -340,6 +349,7 @@ def test_top_level_models_is_the_default_for_each_term(resolve, data, mcp):
         {"text": "s-1", "for_field": {"model": "testapp.payment", "field": "inlines.lines.sales"}},
         {"text": "sales", "kind": "models"},
         models=["testapp.client"],
+        verbose=True,
     )
     assert first["objects"]["searched_models"] == ["testapp.client"]
     assert first["objects"]["status"] == "unique"
@@ -409,9 +419,9 @@ def test_for_field_error_messages(resolve, data):
     assert detail("amount") == "'amount' is not a relation field of testapp.payment's form."
     assert detail("inlines.nope.sales") == "No inline 'nope' on testapp.payment. Inlines: lines."
     assert detail("inlines.nope.x", model="testapp.client") == "No inline 'nope' on testapp.client. Inlines: none."
-    assert detail("client", model="testapp.nope") == "No MCP access to testapp.nope."
+    assert detail("client", model="testapp.nope") == "This kind of record is not available here."
     no_clients = LiveMcpSite(api_site, excluded_models=("auth", "testapp.client"))
-    assert detail("client", site=no_clients) == "No MCP access to the model behind 'client'."
+    assert detail("client", site=no_clients) == "This kind of record is not available here."
 
 
 def test_for_field_reads_the_add_form(resolve, data):
@@ -459,7 +469,7 @@ def test_scan_limit_caps_and_keeps_exact_matches(resolve, data, monkeypatch):
 def test_api_twins_drive_search_fields_and_ordering(resolve, data):
     Sales.objects.create(slug="S-3", client=data["clients"]["Alpha"])
     Sales.objects.create(slug="S-2", client=data["clients"]["Alpha"])
-    out = resolve("s-", site=LiveMcpSite(twins_api_site))["objects"]
+    out = resolve("s-", site=LiveMcpSite(twins_api_site), verbose=True)["objects"]
     assert out["searched_models"] == ["testapp.sales"]
     assert [c["label"] for c in out["candidates"]] == ["S-3", "S-2", "S-1"]
 

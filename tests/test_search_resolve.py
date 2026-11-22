@@ -125,7 +125,7 @@ def test_live_search_fields_filter_rows(search_resolve, data):
 
 
 def test_no_view_permission_hides_a_model(search_resolve, data, staff_view_clients):
-    out = search_resolve("alpha", user=staff_view_clients)
+    out = search_resolve("alpha", user=staff_view_clients, verbose=True)
     assert out["objects"]["searched_models"] == ["testapp.client"]
     assert picks(out["objects"], "model", "id") == [("testapp.client", data["clients"]["Alpha"].pk)]
     assert search_resolve("sales", user=staff_view_clients)["models"]["status"] == "none"

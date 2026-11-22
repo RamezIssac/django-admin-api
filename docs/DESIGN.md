@@ -652,16 +652,28 @@ urlpatterns += [path("mcp/", mcp_site.urls)]
 | Tool | Arguments | Backed by |
 |---|---|---|
 | `list_models` | – | `services.registry` + `mcp_description` |
-| `describe_model` | `model`, `pk?` | `services.schema` + `input_schemas` (per object with `pk`) |
+| `describe_model` | `model`, `id?` | `services.schema` + `input_schemas` (per object with `id`) |
 | `list_objects` | `model`, `filters{}`, `search`, `ordering[]`, `page`, `per_page` | `services.changelist`, always columnar, 25/page default |
-| `get_object` | `model`, `pk` | `services.detail` |
+| `get_object` | `model`, `id` | `services.detail` |
 | `create_object` | `model`, `data`, `dry_run` | `services.create` |
-| `update_object` | `model`, `pk`, `data`, `dry_run` | `services.update(partial=True)` |
-| `delete_object` | `model`, `pk`, `confirm` | preview unless `confirm` |
-| `run_action` | `model`, `action`, `pks[]` or `all` + `filters{}` | `services.run_action` (no dry run) |
-| `run_view` | `model`, `view`, `pk?`, `params{}`, `dry_run` | `services.run_view` (§16) |
-| *view tools* | `pk?`, the view's params, `dry_run?` | views with `mcp_tool=` (§16) |
+| `update_object` | `model`, `id`, `data`, `dry_run` | `services.update(partial=True)` |
+| `delete_object` | `model`, `id`, `confirm` | preview unless `confirm` |
+| `run_action` | `model`, `action`, `ids[]` or `all` + `filters{}` | `services.run_action` (no dry run) |
+| `run_view` | `model`, `view`, `id?`, `params{}`, `dry_run` | `services.run_view` (§16) |
+| *view tools* | `id?`, the view's params, `dry_run?` | views with `mcp_tool=` (§16) |
 
+- MCP speaks `id` and `label` where REST speaks `pk` and `str` (0.1.0a4): object heads, inline
+  rows, every related record (`{"id", "label"}`), `list_objects` `columns[0]`, `describe_model`
+  `id_field`. The arguments `pk` and `pks` stay accepted as aliases of `id` and `ids` for one
+  release; an inline row sent with `id` updates that row. The rename lives in
+  `admin_api/mcp/handlers.py` (`mcp_keys`); services and REST keep `pk`/`str`.
+- Messages name records by verbose name and say "ID" (`"No sales with ID 9."`). Unknown, hidden
+  and excluded models all answer `"This kind of record is not available here."`. A
+  `PermissionDeniedError` without a detail gets a default one; the services pass one per
+  operation (`"You may not change this sales."`). Library messages are wrapped in `gettext`.
+- `list_objects` with a `search` that finds nothing adds `searched_fields`, `id_filters` (the
+  `list_filter` relation parameters, `<path>__<target field>__exact`, as Django's
+  `RelatedFieldListFilter` names them) and a `hint`.
 - `model` is `"app_label.model_name"`. `ordering` takes column names (`"-date"`), translated to
   the admin's `o=` indexes; `filters` are the admin's own changelist parameters, as listed by
   `describe_model` (`filters[].choices[].params`).
@@ -682,6 +694,10 @@ urlpatterns += [path("mcp/", mcp_site.urls)]
   discarded. **Non-DB side effects in hooks still happen**: put them in `on_commit`, or skip
   them when `request.is_dry_run`.
 - `ApiRequestMiddleware` sets `is_api`, `is_mcp` and `is_dry_run` to `False` on every request.
+- `AdminMcpSite.get_instructions(request)` (default: `instructions`) is sent at `initialize`; the
+  HTTP view builds one SDK `Server` per request, stdio asks once at start.
+  `AdminMcpSite.get_language(request)` (default `None`: keep the active language, e.g. from
+  `LocaleMiddleware`) wraps `call_tool` and `get_tools` in `translation.override`.
 
 ### 14.4 JSON Schema
 
@@ -776,7 +792,7 @@ across every model the user can see, in one read-only call.
   top-level `models`: the default for every term without its own `models` or `for_field` and with
   `kind` other than `models`.
   Per term: `objects` and `models`, each `{status, more, candidates}`; `objects` also lists
-  `searched_models`. `kind` (`any`, `objects`, `models`) picks the lists; `models` and
+  `searched_models` when its status is `none` or the call passes `verbose=true`. `kind` (`any`, `objects`, `models`) picks the lists; `models` and
   `for_field` imply `objects`. Object candidates: `model`, `id`, `label` (`str(obj)` read from
   the scoped queryset), `confidence`, `match`, `matched_field`. Model candidates: `model`,
   `label`, `language`, `confidence`, `match`. No other field values leave the server.

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import contextlib
 import logging
 from weakref import WeakSet
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
+from django.utils import translation
+from django.utils.translation import gettext
 
 from ..auth import TokenAuthenticator
 from ..errors import ApiError, NotAuthenticated, PermissionDeniedError
@@ -27,26 +30,29 @@ def all_mcp_sites():
 
 
 DEFAULT_INSTRUCTIONS = """\
-This server exposes a Django admin. You act as the authenticated user, with exactly their \
+This server gives you the user's business records and documents. You act as the user, with exactly their \
 permissions; validation and business rules are the admin's own.
-1. Call list_models to see what you can access.
-2. Call describe_model before filtering or writing: it lists filter parameters, sortable \
-columns, actions and the JSON Schema for create/update.
-3. Prefer dry_run=true on create_object/update_object before the real write. Write results include the \
-saved document's 'totals' when the admin declares them. When the server requires a dry run, a real \
-write is refused unless you pass the confirm_token returned by a valid dry run of the same write. \
-A confirm_token works once and only while the object is unchanged: dry-run again before each write.
-4. delete_object only deletes with confirm=true; without it you get a preview.
-5. Some models have custom views (reports, statements, computed pages, business operations), listed under 'views' by list_models and described (parameters) by describe_model. Run them with run_view; some are also published as their own tools.
-6. Before you filter, report or write with a name the user typed, call resolve_entities and use the ids it \
-returns. A word naming a kind of record ('invoices', 'clients') resolves under 'models'; use that model with \
-list_objects or its views. Each list has a status. \
-'unique': for a read, use it and name its label in your answer; for a write, use it only when its match is \
-'exact' or 'exact_code', otherwise ask. 'ambiguous': ask the user to pick, listing each candidate's label and \
-model. 'none': tell the user nothing matched. Note: offer the unfiltered answer, not a guessed filter or field, \
-because a guessed filter returns wrong numbers.
-Errors come back with the same envelope as the REST API (error, detail, fields, \
-non_field_errors, inlines)."""
+Talk to the user in business language: name a kind of record by its list_models 'name' or 'name_plural' \
+(e.g. "client"), not its 'model' path; name a record or related record by its 'label'. \
+Say "ID" only when the user asks or two records share a label. If a kind of record is unavailable, say so \
+plainly, without model paths, permission codenames or field names.
+1. list_models shows what you can access.
+2. Call describe_model before filtering or writing: filters, sortable columns, actions, create/update \
+JSON Schema.
+3. Prefer dry_run=true before create_object/update_object; results include the document's 'totals' when \
+declared. If a dry run is required, a real write needs the confirm_token of a valid dry run of the same \
+write: one per write, valid while the object is unchanged.
+4. delete_object deletes only with confirm=true; otherwise it previews.
+5. Custom views (reports, statements, business operations) are under 'views' in list_models, parameters \
+in describe_model; run them with run_view or their own tool.
+6. Resolve names the user typed with resolve_entities before you filter, report or write. Note: pass those \
+IDs as describe_model's filter for that kind of record (e.g. 'client'), not as 'search' text, because \
+search does not look into related records; an empty search returns 'searched_fields' and 'id_filters'. A \
+word naming a kind of record ('invoices') resolves under 'models': use it with list_objects or its views. \
+'unique': for a read, use it and name its label; for a write, only when match is 'exact' or 'exact_code', \
+else ask. 'ambiguous': ask which one before running anything (not a run per candidate), \
+listing each candidate's label and the kind of record. 'none': say nothing matched and offer the unfiltered answer, not a guessed filter or field.
+Errors use the REST envelope (error, detail, fields, non_field_errors, inlines)."""
 
 
 class AdminMcpSite:
@@ -118,6 +124,18 @@ class AdminMcpSite:
         """The backend ``resolve_entities`` finds candidates with (default: each admin's own search)."""
         return self.entity_backend_class(self)
 
+    def get_instructions(self, request) -> str:
+        """The server instructions sent to ``request``'s client at ``initialize`` (default: ``instructions``)."""
+        return self.instructions
+
+    def get_language(self, request) -> str | None:
+        """The language tool calls and tool lists run in; ``None`` keeps the active one (``LocaleMiddleware``)."""
+        return None
+
+    def translation_override(self, request):
+        language = self.get_language(request) if request is not None else None
+        return translation.override(language) if language else contextlib.nullcontext()
+
     @property
     def confirm_salt(self) -> str:
         return f"admin_api.mcp.confirm.{self.name}"
@@ -128,7 +146,8 @@ class AdminMcpSite:
         from .handlers import TOOLS
 
         tools = [tool for tool in TOOLS if not (self.read_only and tool.writes)]
-        return tools + self.get_view_tools(request, reserved={t.name for t in tools})
+        with self.translation_override(request):
+            return tools + self.get_view_tools(request, reserved={t.name for t in tools})
 
     def get_view_tools(self, request=None, *, reserved=()) -> list[ToolSpec]:
         from .. import custom_views
@@ -185,7 +204,8 @@ class AdminMcpSite:
         """Run a tool for ``request.user``. Errors become ``is_error`` results with the REST envelope.
         Every call is logged to ``admin_api.mcp.audit`` (see :func:`audit`)."""
         try:
-            result = self._call_tool(request, name, arguments)
+            with self.translation_override(request):
+                result = self._call_tool(request, name, arguments)
         except Exception:
             audit(request, name, arguments, ToolResult({"error": "server_error"}, is_error=True))
             raise
@@ -200,7 +220,7 @@ class AdminMcpSite:
         if arguments is not None and not isinstance(arguments, dict):
             return ToolResult(_error(ApiError("Arguments must be an object.", code="invalid_arguments")), True)
         if not self.api_site.has_permission(request):
-            return ToolResult(_error(PermissionDeniedError()), is_error=True)
+            return ToolResult(_error(PermissionDeniedError(gettext("You may not use this server."))), is_error=True)
         try:
             return ToolResult(tool.handler(self, request, arguments or {}))
         except ApiError as exc:
@@ -231,10 +251,10 @@ def audit(request, name: str, arguments, result: ToolResult) -> None:
         "token": getattr(token, "prefix", None),
         "ip": request.META.get("REMOTE_ADDR"),
         "model": args.get("model"),
-        "pk": args.get("pk"),
+        "pk": args.get("id", args.get("pk")),
         "view": args.get("view"),
         "action": args.get("action"),
-        "pks": args.get("pks"),
+        "pks": args.get("ids", args.get("pks")),
         "all": args.get("all") is True,
         "dry_run": args.get("dry_run") is True,
         "confirm": args.get("confirm") is True,

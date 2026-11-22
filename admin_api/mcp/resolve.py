@@ -158,11 +158,11 @@ def for_field_target(targets: dict[str, Target], request, for_field) -> Target:
         raise InvalidArguments("'for_field' must be an object with 'model' and 'field'.")
     source = targets.get(for_field["model"])
     if source is None:
-        raise NotFound(f"No MCP access to {for_field['model']}.")
+        raise NotFound()
     form_field = _form_field(source, request, str(for_field["field"]))
     related = targets.get(form_field.queryset.model._meta.label_lower)
     if related is None:
-        raise NotFound(f"No MCP access to the model behind {for_field['field']!r}.")
+        raise NotFound()
     limit = form_field.get_limit_choices_to()
     queryset = related.queryset.complex_filter(limit) if limit else related.queryset
     return replace(related, queryset=queryset, to_field=form_field.to_field_name)
@@ -301,14 +301,13 @@ def _object_candidates(hits: list[Hit]) -> list[dict]:
     return out
 
 
-def _resolve_objects(backend, request, term: str, targets: list[Target], limit: int) -> dict:
+def _resolve_objects(backend, request, term: str, targets: list[Target], limit: int, verbose: bool) -> dict:
     hits, capped = backend.search_objects(request, term, targets, limit=limit)
-    return {
-        "status": list_status(hits),
-        "more": capped or len(hits) > limit,
-        "candidates": _object_candidates(hits[:limit]),
-        "searched_models": [t.label for t in targets],
-    }
+    status = list_status(hits)
+    out = {"status": status, "more": capped or len(hits) > limit, "candidates": _object_candidates(hits[:limit])}
+    if verbose or status == "none":
+        out["searched_models"] = [t.label for t in targets]
+    return out
 
 
 def _resolve_models(backend, request, term: str, targets: list[Target], limit: int) -> dict:
@@ -334,7 +333,9 @@ def _check_labels(value):
         raise InvalidArguments("'models' must be a list of model labels.")
 
 
-def _resolve_term(backend, request, targets: dict[str, Target], term: dict, limit: int, default_models) -> dict:
+def _resolve_term(
+    backend, request, targets: dict[str, Target], term: dict, limit: int, default_models, verbose
+) -> dict:
     if not isinstance(term, dict):
         raise InvalidArguments("Each entry of 'terms' must be an object with 'text'.")
     text = term.get("text")
@@ -364,7 +365,7 @@ def _resolve_term(backend, request, targets: dict[str, Target], term: dict, limi
         else:
             object_targets = list(targets.values())
         object_targets = [t for t in object_targets if t.search_fields]
-        out["objects"] = _resolve_objects(backend, request, text, object_targets, limit)
+        out["objects"] = _resolve_objects(backend, request, text, object_targets, limit, verbose)
     if kind in ("any", "models"):
         out["models"] = _resolve_models(backend, request, text, list(targets.values()), limit)
     return out
@@ -380,8 +381,11 @@ def resolve_entities(site, request, args) -> dict:
     if not isinstance(limit, int) or isinstance(limit, bool):
         raise InvalidArguments("'limit' must be an integer.")
     limit = max(1, min(limit, MAX_LIMIT))
+    verbose = args.get("verbose", False)
+    if not isinstance(verbose, bool):
+        raise InvalidArguments("'verbose' must be a boolean.")
     targets = allowed_targets(site, request)
     default_models = args.get("models")
     _check_labels(default_models)
     backend = site.get_entity_backend()
-    return {"results": [_resolve_term(backend, request, targets, term, limit, default_models) for term in terms]}
+    return {"results": [_resolve_term(backend, request, targets, t, limit, default_models, verbose) for t in terms]}

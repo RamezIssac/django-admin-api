@@ -112,7 +112,7 @@ def test_list_models_read_only_perms(call, data):
 def test_describe_model(call, data):
     out, err = call("describe_model", {"model": "testapp.sales"})
     assert not err
-    assert out["model"] == "testapp.sales" and out["pk_field"] == "id"
+    assert out["model"] == "testapp.sales" and out["id_field"] == "id"
     assert {c["name"] for c in out["columns"]} >= {"slug", "status", "doubled"}
     status_filter = next(f for f in out["filters"] if f["title"] == "status")
     assert {"display": "Posted", "params": {"status__exact": "posted"}} in status_filter["choices"]
@@ -136,7 +136,7 @@ def test_list_objects_columnar_filters_ordering(call, data):
     )
     assert not err, out
     assert out["count"] == 3 and out["pages"] == 2 and out["per_page"] == 2
-    assert out["columns"][:2] == ["pk", "slug"]
+    assert out["columns"][:2] == ["id", "slug"]
     assert [row[1] for row in out["rows"]] == ["S-5", "S-3"]
     assert "next" not in out
 
@@ -211,7 +211,7 @@ def test_create_and_update(call, data):
     out, err = call("create_object", {"model": "testapp.sales", "data": payload})
     assert not err, out
     assert out["object"]["slug"] == "S-9" and out["messages"] == [{"level": "info", "text": "Saved S-9"}]
-    pk = out["object"]["pk"]
+    pk = out["object"]["id"]
     assert LogEntry.objects.filter(object_id=str(pk)).count() == 1
 
     out, err = call("update_object", {"model": "testapp.sales", "pk": pk, "data": {"status": "posted"}})
@@ -264,7 +264,7 @@ def test_delete_needs_confirm(call, data):
     assert out["preview"]["can_delete"] is True
     assert Sales.objects.filter(pk=sale.pk).exists()
     out, err = call("delete_object", {"model": "testapp.sales", "pk": sale.pk, "confirm": True})
-    assert not err and out == {"deleted": True, "object": {"pk": sale.pk, "str": "S-2"}}
+    assert not err and out == {"deleted": True, "object": {"id": sale.pk, "label": "S-2"}}
     assert not Sales.objects.filter(pk=sale.pk).exists()
 
 

@@ -39,8 +39,6 @@ def _error(exc: ApiError, **headers) -> JsonResponse:
 
 
 def make_view(mcp_site):
-    server = build_server(mcp_site)
-
     @csrf_exempt
     def mcp_view(request):
         request.is_api = True
@@ -60,6 +58,8 @@ def make_view(mcp_site):
         if not mcp_site.api_site.has_permission(request):
             return _error(PermissionDeniedError())
         mcp_site.prepare_request(request)
+        # one Server per request: the instructions may depend on the user
+        server = build_server(mcp_site, instructions=mcp_site.get_instructions(request))
         return async_to_sync(bridge.handle)(server, request)
 
     return mcp_view

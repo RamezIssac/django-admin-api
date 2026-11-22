@@ -52,7 +52,7 @@ def test_initialize(client, token):
     assert out["protocolVersion"] == VERSION
     assert out["serverInfo"]["name"] == "testapp"
     assert out["capabilities"]["tools"] is not None
-    assert out["instructions"].startswith("This server exposes a Django admin.")
+    assert out["instructions"].startswith("This server gives you the user's business records and documents.")
 
 
 def test_tools_list(client, token):

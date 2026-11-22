@@ -18,6 +18,7 @@ from __future__ import annotations
 import re
 
 from django.core.exceptions import ValidationError
+from django.utils.translation import gettext, gettext_lazy
 
 OPS = ("view", "add", "change", "delete")
 _SCOPE_RE = re.compile(r"^(\*|[a-z_][a-z0-9_]*)\.(\*|[a-z_][a-z0-9_]*):(\*|view|add|change|delete)$")
@@ -83,11 +84,22 @@ def request_allows(request, opts, op: str) -> bool:
     return scopes_allow(scopes, opts.app_label, opts.model_name, op)
 
 
+VERBS = {
+    "view": gettext_lazy("view"),
+    "add": gettext_lazy("add"),
+    "change": gettext_lazy("change"),
+    "delete": gettext_lazy("delete"),
+}
+
+
 def check(request, opts, op: str):
     from .errors import PermissionDeniedError
 
     if not request_allows(request, opts, op):
-        raise PermissionDeniedError(f"Token scopes do not allow '{op}' on {opts.app_label}.{opts.model_name}.")
+        raise PermissionDeniedError(
+            gettext("This connection may not %(op)s %(models)s.")
+            % {"op": VERBS.get(op, op), "models": opts.verbose_name_plural}
+        )
 
 
 class ScopedInlineMixin:
