@@ -222,10 +222,14 @@ def _write_result(data: dict) -> dict:
 
 def _rolled_back(model_admin, request, fn) -> dict:
     """``fn()`` as a dry run: ``request.is_dry_run``, one transaction rolled back (on_commit callbacks
-    dropped), outgoing mail captured and listed under ``suppressed_emails``."""
+    dropped), outgoing mail captured and listed under ``suppressed_emails``, stored files deleted."""
     request.is_dry_run = True
     try:
-        with dryrun.capture_mail() as emails, transaction.atomic(using=router.db_for_write(model_admin.model)):
+        with (
+            dryrun.capture_mail() as emails,
+            dryrun.delete_stored_files(),
+            transaction.atomic(using=router.db_for_write(model_admin.model)),
+        ):
             out = fn()
             transaction.set_rollback(True)
     finally:

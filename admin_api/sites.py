@@ -4,12 +4,13 @@ from functools import wraps
 from weakref import WeakSet
 
 from django.contrib import admin
+from django.core.exceptions import RequestDataTooBig
 from django.urls import path
 from django.views.decorators.csrf import csrf_exempt
 
 from .auth import SessionAuthenticator, TokenAuthenticator
 from .contrib.subadmin import SubAdminAdapter
-from .errors import ApiError, MethodNotAllowed, NotAuthenticated, PermissionDeniedError
+from .errors import ApiError, MethodNotAllowed, NotAuthenticated, PayloadTooLarge, PermissionDeniedError
 from .mixins import ApiAdminMixin
 
 _all_sites: WeakSet = WeakSet()
@@ -30,6 +31,8 @@ class AdminApiSite:
     authenticators = [TokenAuthenticator, SessionAuthenticator]
     version = "v1"
     max_page_size = 500
+    # bytes per uploaded file; raise DATA_UPLOAD_MAX_MEMORY_SIZE to match (base64 adds a third)
+    max_upload_size = 5 * 1024 * 1024
     # Nested admins (see admin_api.nested). Duck-typed: inactive unless the library is used.
     nested_adapters = [SubAdminAdapter]
 
@@ -168,6 +171,8 @@ class AdminApiSite:
                 return view(request, *args, **kwargs)
             except ApiError as exc:
                 return exc.as_response()
+            except RequestDataTooBig:
+                return PayloadTooLarge().as_response()
 
         return inner
 

@@ -92,6 +92,13 @@ lines.
 | `POST /api/v1/<app>/<model>/actions/<name>/` | run an admin action on `{"pks": [...]}` or `{"all": true}` (+ filters); `api_<name>` twin for actions that return files/pages |
 | `GET`/`POST /api/v1/<app>/<model>/views/<name>/` | run a custom view (`@admin_api.view`, below) |
 | `GET`/`POST /api/v1/<app>/<model>/<pk>/views/<name>/` | run a custom view on one object |
+File and image fields, on the main form and in inline rows, take
+`{"filename": "a.pdf", "content_base64": "..."}`; `null` clears an optional file and a write that
+leaves the field out keeps it. Reads return `{"name", "url"}`. `AdminApiSite.max_upload_size`
+caps each file (default 5 MiB). Note: raise `DATA_UPLOAD_MAX_MEMORY_SIZE` to about 1.4 times the
+cap and not leave Django's 2.5 MB default, because base64 adds a third and a larger body answers
+`413 payload_too_large`.
+
 Design: [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Authentication
@@ -151,7 +158,8 @@ On the admin: `mcp_description = "…"` (context for the LLM; a string or a call
 
 **Side effects and dry runs.** A dry run runs the whole save (or view) and rolls the database
 back. E-mail sent during it is captured, not delivered, and listed in the result as
-`suppressed_emails` (`recipients` and `subject`). Other side effects (HTTP calls, files, queues)
+`suppressed_emails` (`recipients` and `subject`). Files stored through Django's storage are
+deleted after the dry run. Other side effects (HTTP calls, files written directly, queues)
 still happen. Note: send side effects from `transaction.on_commit` and not from `save()` or a
 signal, because a dry run discards `on_commit` callbacks and rolls back nothing outside the
 database. Mail sent from `on_commit` does not appear in `suppressed_emails`.
