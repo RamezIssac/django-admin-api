@@ -73,6 +73,9 @@
   one instructions text per user, set in the Django admin (`McpUserInstructionsAdmin`). The default
   `AdminMcpSite.get_instructions(request)` appends it to the site's instructions, cut at
   `instructions_max_length` (4,096) with a note.
+- MCP `list_objects` pages through at most `AdminMcpSite.list_max_rows` records of a query (default
+  1000, `None` for no cap). A larger query reports only the reachable `pages` and adds a `hint`
+  pointing at reports, filters and search; a page past the cap answers `invalid_arguments`.
 
 ## 0.1.0a3 (2026-11-19)
 

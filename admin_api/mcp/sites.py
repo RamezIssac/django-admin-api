@@ -69,6 +69,7 @@ class AdminMcpSite:
 
     default_per_page = 25
     confirm_token_max_age = 900  # seconds a dry run's confirm_token stays valid
+    list_max_rows = 1000  # list_objects pages through this many rows of a query; None: no cap
     instructions = DEFAULT_INSTRUCTIONS
     instructions_max_length = 4096  # MCP clients cut server instructions past this length
     # app labels or "app_label.model_name" that resolve_entities never searches
