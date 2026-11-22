@@ -178,6 +178,7 @@ All URLs are under `<mount>/v1/`. The version comes from `AdminApiSite.version`.
 | PUT | `/<app>/<model>/<pk>/` | full update | `has_change_permission(obj)` |
 | DELETE | `/<app>/<model>/<pk>/` | delete | `has_delete_permission(obj)` |
 | GET | `/<app>/<model>/<pk>/delete-preview/` | cascade preview | `has_delete_permission(obj)` |
+| GET | `/<app>/<model>/<pk>/history/` | admin history, newest first, `?limit=` | `has_view_or_change_permission(obj)` |
 | POST | `/<app>/<model>/actions/<name>/` | run an action | action's `allowed_permissions` |
 | any | `/<app>/<model>/<pk>/<child>/[<pk>/<child>/…]` + any tail above | nested admins (§15) | same, plus view on every ancestor |
 | GET/POST | `/<app>/<model>/views/<name>/` | custom view (§16) | the view's `permissions` |
@@ -655,6 +656,7 @@ urlpatterns += [path("mcp/", mcp_site.urls)]
 | `describe_model` | `model`, `id?` | `services.schema` + `input_schemas` (per object with `id`) |
 | `list_objects` | `model`, `filters{}`, `search`, `ordering[]`, `page`, `per_page` | `services.changelist`, always columnar, 25/page default |
 | `get_object` | `model`, `id` | `services.detail` |
+| `get_history` | `model`, `id`, `limit` | `services.history`: the object's LogEntry rows (`when`, `user`, `action`, `message` as rendered by `get_change_message`), newest first, 20 by default, at most 100, a `hint` when older rows exist |
 | `create_object` | `model`, `data`, `dry_run` | `services.create` |
 | `update_object` | `model`, `id`, `data`, `dry_run` | `services.update(partial=True)` |
 | `delete_object` | `model`, `id`, `confirm` | preview unless `confirm` |
@@ -778,7 +780,9 @@ action, pks, `all`, `dry_run`, `confirm`, outcome. Caller strings are logged wit
 **LogEntry.** For MCP requests `ApiAdminMixin.log_addition` / `log_change` store a plain-text
 message, the rendered change message plus `Via MCP.` (`Changed Status. Via MCP.`). REST and the
 HTML admin keep Django's structured message. Deletions are not annotated: Django's
-`log_deletions` takes no message.
+`log_deletions` takes no message. A write view run on one record logs a change, `Ran <view
+title>.`, inside its transaction (REST and MCP; a dry run rolls it back). The message carries no
+parameter values. Write views without a record log nothing.
 
 ### 14.8 Tests
 
@@ -937,7 +941,7 @@ are `parents`. Each child segment is the child's `model_name` (as subadmin's own
 | | items of sale 7 of client 1 |
 |---|---|
 | HTML | `/admin/store/client/1/sales/7/salesitem/` |
-| REST | `/api/v1/store/client/1/sales/7/salesitem/` (+ `schema/`, `actions/<name>/`, `<pk>/`, `<pk>/delete-preview/`) |
+| REST | `/api/v1/store/client/1/sales/7/salesitem/` (+ `schema/`, `actions/<name>/`, `<pk>/`, `<pk>/delete-preview/`, `<pk>/history/`) |
 | MCP | `model="store.client/sales/salesitem"`, `parents=[1, 7]` |
 
 `admin_api.nested.ModelPath` (`parse`, `label`, `child`, `url`, `url_template`). A nested
@@ -969,7 +973,8 @@ paths.
 - **REST.** One catch-all route after the flat ones, `<app>/<model>/<path:nested>/`, parsed by
   `views.nested.parse_nested` into `(segments, parents, kind, kwargs)` and dispatched to the
   normal view classes with `segments`/`parents`. Segments must look like a `model_name`; a pk
-  of `actions` / a tail of `delete-preview` resolve as on flat models.
+  of `actions` / a tail of `delete-preview` or `history` resolve as on flat models, so a child
+  admin cannot be named `history`.
 - **MCP.** Every model tool takes optional `parents`; `model` accepts a path. Hiding an admin
   (`api_enabled` / `mcp_enabled = False`, `is_exposed`) hides its descendants.
 

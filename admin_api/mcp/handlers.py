@@ -467,6 +467,12 @@ def get_object(site, request, args) -> dict:
     return data
 
 
+def get_history(site, request, args) -> dict:
+    model_admin, _label = _model_admin(site, request, args)
+    limit = _arg(args, "limit", int, required=False)
+    return mcp_keys(services.history(model_admin, request, _id_arg(args), limit))
+
+
 def create_object(site, request, args) -> dict:
     _ensure_writable(site)
     model_admin, _label = _model_admin(site, request, args)
@@ -671,6 +677,28 @@ TOOLS = [
         input_schema=obj({"model": MODEL_ARG, "parents": PARENTS_ARG, "id": ID_ARG, "pk": PK_ALIAS_ARG}, ["model"]),
         output_schema=ANY_OBJECT,
         handler=get_object,
+        annotations=READ,
+    ),
+    ToolSpec(
+        name="get_history",
+        title="Get a record's history",
+        description="Who changed one record, when and how, newest first: the admin's history page.",
+        input_schema=obj(
+            {
+                "model": MODEL_ARG,
+                "parents": PARENTS_ARG,
+                "id": ID_ARG,
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": services.HISTORY_MAX_LIMIT,
+                    "default": services.HISTORY_LIMIT,
+                },
+            },
+            ["model", "id"],
+        ),
+        output_schema=ANY_OBJECT,
+        handler=get_history,
         annotations=READ,
     ),
     ToolSpec(

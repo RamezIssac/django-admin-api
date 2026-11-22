@@ -91,6 +91,15 @@
   `protected`, `can_delete`) and `confirm_required`, and deletes nothing. REST actions are unchanged.
 - Action descriptions are formatted like the admin's action menu: `delete_selected` reads
   "Delete selected sales", not "Delete selected %(verbose_name_plural)s".
+- **New MCP tool `get_history`** (read-only) and REST `GET <pk>/history/`: one record's admin
+  history from `LogEntry`, newest first, each entry with `when`, `user`, `action` (`added`,
+  `changed`, `deleted`) and `message` in the admin's own wording. `limit` defaults to 20, at most
+  100; a `hint` says when older entries exist. Same permission as the admin's history page
+  (`has_view_or_change_permission(obj)` on an object from `get_queryset`). A nested child admin
+  can no longer be named `history`.
+- **Write views log a change.** `@admin_api.view(writes=True)` run on one record (REST and MCP)
+  creates a `LogEntry` like create and update do: `Ran <view title>.` (plus `Via MCP.`), without
+  parameter values. A dry run rolls it back; write views on no single record log nothing.
 
 ## 0.1.0a3 (2026-11-19)
 

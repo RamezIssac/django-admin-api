@@ -428,6 +428,8 @@ def run_view(
                 result = method(*args, **kwargs)
                 if isinstance(result, HttpResponseBase):
                     transaction.set_rollback(True)
+                elif obj is not None:  # the view's title only: parameter values stay out of the audit table
+                    model_admin.log_change(request, obj, gettext("Ran %(view)s.") % {"view": spec.title})
         else:
             result = method(*args, **kwargs)
     except DjangoPermissionDenied as exc:

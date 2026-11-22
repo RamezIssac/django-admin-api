@@ -33,6 +33,7 @@ def test_model_path_urls():
         ("1/sales/actions/delete_selected", (["sales"], ["1"], "action", {"action_name": "delete_selected"})),
         ("1/sales/7", (["sales"], ["1"], "object", {"object_id": "7"})),
         ("1/sales/7/delete-preview", (["sales"], ["1"], "delete_preview", {"object_id": "7"})),
+        ("1/sales/7/history", (["sales"], ["1"], "history", {"object_id": "7"})),
         ("1/sales/7/salesitem", (["sales", "salesitem"], ["1", "7"], "changelist", {})),
         ("1/sales/7/salesitem/3", (["sales", "salesitem"], ["1", "7"], "object", {"object_id": "3"})),
     ],

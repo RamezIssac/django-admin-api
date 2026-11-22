@@ -79,6 +79,7 @@ EXPECTED = {
         "create_object",
         "delete_object",
         "describe_model",
+        "get_history",
         "get_object",
         "list_models",
         "list_objects",

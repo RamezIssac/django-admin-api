@@ -88,6 +88,7 @@ lines.
 | `PATCH`/`PUT /api/v1/<app>/<model>/<pk>/` | update; `{"inlines": {"items": [{"pk": 1, "quantity": 2}, {"pk": 2, "_delete": true}, {...new}]}}` |
 | `DELETE /api/v1/<app>/<model>/<pk>/` | `delete_model` + LogEntry; 409 when protected |
 | `GET /api/v1/<app>/<model>/<pk>/delete-preview/` | the admin's delete confirmation data as JSON |
+| `GET /api/v1/<app>/<model>/<pk>/history/` | the admin history (LogEntry), newest first; `?limit=` (default 20, max 100) |
 | `POST /api/v1/<app>/<model>/actions/<name>/` | run an admin action on `{"pks": [...]}` or `{"all": true}` (+ filters); `api_<name>` twin for actions that return files/pages |
 | `GET`/`POST /api/v1/<app>/<model>/views/<name>/` | run a custom view (`@admin_api.view`, below) |
 | `GET`/`POST /api/v1/<app>/<model>/<pk>/views/<name>/` | run a custom view on one object |
@@ -133,7 +134,7 @@ Step by step, with scopes, `.mcp.json` and troubleshooting: [Connect Claude Code
 
 Tools: `list_models`, `describe_model` (columns, filters, actions, custom views, JSON Schema),
 `list_objects` (admin filters, search, ordering, paging), `resolve_entities` (names to ids and
-models), `get_object`, `create_object` /
+models), `get_object`, `get_history` (the record's admin history), `create_object` /
 `update_object` (with `dry_run`: the admin's validation only, nothing saved), `delete_object`
 (preview unless `confirm=true`), `run_action`, `run_view` (custom views), plus one tool per view
 published with `mcp_tool=`.
@@ -285,6 +286,8 @@ An engine subclasses `admin_api.contrib.search.engines.base.SearchEngine`: `upse
   `confirm`; `run_action` has no dry run and is not gated, and its `delete_selected` previews
   unless `confirm=true`.
 - **Audit.** The LogEntry of an MCP create or update reads, for example, `Changed Status. Via MCP.`
+  A write view (`@admin_api.view(writes=True)`) run on one record logs `Ran <view title>.`, without
+  its parameter values; write views on no single record log nothing.
   Every tool call is logged at INFO to the `admin_api.mcp.audit` logger: tool, user pk, token
   prefix, IP, model, pk, view, action, pks, `all`, `dry_run`, `confirm` and the outcome (`ok` or the
   error code), without `data`.
@@ -357,7 +360,7 @@ API and in MCP with no configuration. The address follows the admin URL:
 | | items of sale 7 of client 1 |
 |---|---|
 | HTML admin | `/admin/store/client/1/sales/7/salesitem/` |
-| REST | `/api/v1/store/client/1/sales/7/salesitem/` (+ `schema/`, `actions/<name>/`, `views/<name>/`, `<pk>/`, `<pk>/delete-preview/`, `<pk>/views/<name>/`) |
+| REST | `/api/v1/store/client/1/sales/7/salesitem/` (+ `schema/`, `actions/<name>/`, `views/<name>/`, `<pk>/`, `<pk>/delete-preview/`, `<pk>/history/`, `<pk>/views/<name>/`) |
 | MCP | `model="store.client/sales/salesitem"`, `parents=[1, 7]` |
 
 Lists are scoped to the parent, the parent FK is set on create (and is not accepted in payloads),

@@ -158,6 +158,10 @@ def test_update_delete_preview_delete(api, data):
     assert Sales.objects.get(pk=s1.pk).value == Decimal(99)
     status, body = api("get", sales_url(data, s1.pk, "delete-preview"))
     assert status == 200
+    status, body = api("get", sales_url(data, s1.pk, "history"))
+    assert status == 200 and body["history"][0]["message"] == "Changed Value."
+    status, body = api("post", sales_url(data, s1.pk, "history"))
+    assert (status, body["error"]) == (405, "method_not_allowed")
     status, body = api("delete", sales_url(data, s1.pk))
     assert status == 200
     assert not Sales.objects.filter(pk=s1.pk).exists()
