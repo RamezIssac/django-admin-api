@@ -11,11 +11,13 @@ from __future__ import annotations
 from django.apps import apps
 from django.utils import translation
 
-from ...mcp.resolve import CONFIDENCE, DEFAULT_LIMIT, FUZZY_WEIGHT, Hit, _languages, match_text
+from ...mcp.resolve import CONFIDENCE, DEFAULT_LIMIT, Hit, _languages, match_text
 from .conf import get_engine
 from .engines.base import MODEL, OBJECT, Scope, SearchQuery
 from .fold import fold
 from .indexer import LABEL_FIELDS, code_fields, content_type_of, local_fields, nearest_model
+
+FUZZY_WEIGHT = 0.6  # a fuzzy hit's confidence is the engine's own score times this
 
 
 class SearchEntityBackend:

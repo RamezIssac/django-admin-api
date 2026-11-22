@@ -18,7 +18,7 @@ from django.core.exceptions import FieldDoesNotExist
 from django.db import DEFAULT_DB_ALIAS, models, transaction
 from django.utils import timezone, translation
 
-from ...mcp.resolve import CODE_FIELDS, _languages, is_excluded, model_label
+from ...mcp.resolve import CODE_FIELDS, _languages, is_excluded
 from .conf import get_engine, search_settings
 from .engines.base import MODEL, OBJECT, Entry
 from .fold import fold
@@ -185,7 +185,7 @@ class Indexer:
             self.engine.prune(owned_types, older_than=started)
             return 0
         queryset = model._base_manager.order_by("pk")
-        total, done, label = queryset.count(), 0, model_label(model)
+        total, done, label = queryset.count(), 0, model._meta.label_lower
         batch: list = []
 
         def flush():
@@ -217,7 +217,7 @@ class Indexer:
         engine = conf["DEFAULT_ENGINE"]
         payload = [
             INDEX_FORMAT,
-            model_label(model),
+            model._meta.label_lower,
             self.index_fields(model),
             _languages(),
             engine,
@@ -231,7 +231,7 @@ class Indexer:
         labels rebuilt."""
         from .models import SearchIndexState
 
-        indexed = {model_label(m): m for m in self.admins}
+        indexed = {m._meta.label_lower: m for m in self.admins}
         state = dict(SearchIndexState.objects.values_list("label", "fingerprint"))
         rebuilt = []
         for label, model in indexed.items():
@@ -283,7 +283,7 @@ def _index_saved(indexer: Indexer, obj) -> None:
     try:
         indexer.index_object(obj)
     except Exception:
-        logger.exception("search index: could not index %s %r", model_label(type(obj)), obj.pk)
+        logger.exception("search index: could not index %s %r", obj._meta.label_lower, obj.pk)
 
 
 def on_post_save(sender, instance, raw=False, using=DEFAULT_DB_ALIAS, **kwargs):

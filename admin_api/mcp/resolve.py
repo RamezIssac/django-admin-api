@@ -10,7 +10,7 @@ default :class:`LiveEntityBackend` runs each admin's own ``get_search_results`` 
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from django import forms
 from django.conf import settings
@@ -29,7 +29,7 @@ MAX_TERMS = 20
 KINDS = ("any", "objects", "models")
 INLINE_FIELD_PREFIX = "inlines."
 
-# match type -> confidence; "fuzzy" engines scale their own score by FUZZY_WEIGHT
+# match type -> confidence
 CONFIDENCE = {
     "exact": 1.0,
     "exact_code": 0.95,
@@ -39,7 +39,6 @@ CONFIDENCE = {
     "contains": 0.6,
     "search": 0.5,  # found by the admin's search, but no single field holds the whole term
 }
-FUZZY_WEIGHT = 0.6
 EXACT_MATCHES = ("exact", "exact_code")
 CONFIDENT = 0.7
 CODE_FIELDS = frozenset({"slug", "code", "reference", "ref_number"})
@@ -68,15 +67,14 @@ def match_text(term: str, value, *, code: bool = False) -> str | None:
     return None
 
 
-def list_status(confidences_and_matches) -> str:
-    """``none``, ``unique`` or ``ambiguous`` for one list of ``(confidence, match)`` pairs."""
-    hits = list(confidences_and_matches)
+def list_status(hits) -> str:
+    """``none``, ``unique`` or ``ambiguous`` for one list of hits."""
     if not hits:
         return "none"
-    exact = [m for _c, m in hits if m in EXACT_MATCHES]
+    exact = [h for h in hits if h.match in EXACT_MATCHES]
     if exact:
         return "unique" if len(exact) == 1 else "ambiguous"
-    return "unique" if sum(1 for c, _m in hits if c >= CONFIDENT) == 1 else "ambiguous"
+    return "unique" if sum(1 for h in hits if h.confidence >= CONFIDENT) == 1 else "ambiguous"
 
 
 # --------------------------------------------------------------------------------------------
@@ -108,14 +106,9 @@ class Hit:
     language: str | None = None
 
 
-def model_label(model) -> str:
-    return f"{model._meta.app_label}.{model._meta.model_name}"
-
-
 def is_excluded(site, model) -> bool:
-    opts = model._meta
-    excluded = set(site.excluded_models or ())
-    return opts.app_label in excluded or f"{opts.app_label}.{opts.model_name}" in excluded
+    excluded = site.excluded_models or ()
+    return model._meta.app_label in excluded or model._meta.label_lower in excluded
 
 
 def allowed_targets(site, request) -> dict[str, Target]:
@@ -129,7 +122,7 @@ def allowed_targets(site, request) -> dict[str, Target]:
             or not scopes.request_allows(request, model._meta, "view")
         ):
             continue
-        label = model_label(model)
+        label = model._meta.label_lower
         out[label] = Target(
             model=model,
             label=label,
@@ -167,19 +160,12 @@ def for_field_target(targets: dict[str, Target], request, for_field) -> Target:
     if source is None:
         raise NotFound(f"No MCP access to {for_field['model']}.")
     form_field = _form_field(source, request, str(for_field["field"]))
-    related = targets.get(model_label(form_field.queryset.model))
+    related = targets.get(form_field.queryset.model._meta.label_lower)
     if related is None:
         raise NotFound(f"No MCP access to the model behind {for_field['field']!r}.")
     limit = form_field.get_limit_choices_to()
     queryset = related.queryset.complex_filter(limit) if limit else related.queryset
-    return Target(
-        model=related.model,
-        label=related.label,
-        admin=related.admin,
-        queryset=queryset,
-        search_fields=related.search_fields,
-        to_field=form_field.to_field_name,
-    )
+    return replace(related, queryset=queryset, to_field=form_field.to_field_name)
 
 
 # --------------------------------------------------------------------------------------------
@@ -239,28 +225,25 @@ class LiveEntityBackend:
             pks.extend(qs.filter(exact).values_list("pk", flat=True)[: self.scan_limit])
         scanned = list(qs.values_list("pk", flat=True)[: self.scan_limit + 1])
         capped = len(scanned) > self.scan_limit
-        pks = list(dict.fromkeys(pks + scanned[: self.scan_limit]))
 
-        best: dict = {pk: Hit(target, pk) for pk in pks}
+        best: dict = {pk: Hit(target, pk) for pk in pks + scanned[: self.scan_limit]}
         wanted = normalize(term)
-        if paths and pks:
-            for pk, *values in target.queryset.filter(pk__in=pks).values_list("pk", *paths):
-                hit = best.get(pk)
-                if hit is None:
-                    continue
+        if paths and best:
+            for pk, *values in target.queryset.filter(pk__in=list(best)).values_list("pk", *paths):
+                hit = best[pk]
                 for path, value in zip(paths, values):
                     code = path.rsplit("__", 1)[-1] in CODE_FIELDS
                     match = match_text(wanted, value, code=code) if value is not None else None
                     if match and CONFIDENCE[match] > hit.confidence:
                         hit.match, hit.confidence, hit.matched_field = match, CONFIDENCE[match], path
-        return sorted(best.values(), key=lambda h: -h.confidence), capped
+        return list(best.values()), capped
 
     def search_models(self, request, term: str, targets: list[Target], limit=None) -> list[Hit]:
         """Models whose verbose name, plural or model name matches, in each language."""
-        wanted, hits = normalize(term), []
+        wanted, languages, hits = normalize(term), _languages(), []
         for target in targets:
             best = None
-            for language in _languages():
+            for language in languages:
                 with translation.override(language):
                     opts = target.model._meta
                     names = (str(opts.verbose_name), str(opts.verbose_name_plural), opts.model_name)
@@ -287,29 +270,28 @@ def _languages() -> list[str]:
 # --------------------------------------------------------------------------------------------
 # the tool
 # --------------------------------------------------------------------------------------------
-def _json_id(value):
-    return value if isinstance(value, (int, str)) and not isinstance(value, bool) else str(value)
-
-
 def _object_candidates(hits: list[Hit]) -> list[dict]:
     """Candidate dicts for ``hits``, labels read from each target's scoped queryset."""
-    by_target: dict = {}
+    pks_by_target: dict = {}
     for hit in hits:
-        by_target.setdefault(id(hit.target), (hit.target, []))[1].append(hit.pk)
-    objects = {}
-    for target, pks in by_target.values():
-        for obj in target.queryset.filter(pk__in=pks):
-            objects[(id(target), obj.pk)] = obj
+        pks_by_target.setdefault(hit.target.label, (hit.target, []))[1].append(hit.pk)
+    objects = {
+        (target.label, obj.pk): obj
+        for target, pks in pks_by_target.values()
+        for obj in target.queryset.filter(pk__in=pks)
+    }
     out = []
     for hit in hits:
-        obj = objects.get((id(hit.target), hit.pk))
+        obj = objects.get((hit.target.label, hit.pk))
         if obj is None:
             continue
         object_id = getattr(obj, hit.target.to_field) if hit.target.to_field else obj.pk
+        if not isinstance(object_id, (int, str)) or isinstance(object_id, bool):
+            object_id = str(object_id)
         out.append(
             {
                 "model": hit.target.label,
-                "id": _json_id(object_id),
+                "id": object_id,
                 "label": str(obj),
                 "confidence": hit.confidence,
                 "match": hit.match,
@@ -319,21 +301,20 @@ def _object_candidates(hits: list[Hit]) -> list[dict]:
     return out
 
 
-def _resolve_objects(site, request, term: str, targets: list[Target], limit: int) -> dict:
-    hits, capped = site.get_entity_backend().search_objects(request, term, targets, limit=limit)
-    status = list_status((h.confidence, h.match) for h in hits)
+def _resolve_objects(backend, request, term: str, targets: list[Target], limit: int) -> dict:
+    hits, capped = backend.search_objects(request, term, targets, limit=limit)
     return {
-        "status": status,
+        "status": list_status(hits),
         "more": capped or len(hits) > limit,
         "candidates": _object_candidates(hits[:limit]),
         "searched_models": [t.label for t in targets],
     }
 
 
-def _resolve_models(site, request, term: str, targets: list[Target], limit: int) -> dict:
-    hits = site.get_entity_backend().search_models(request, term, targets, limit=limit)
+def _resolve_models(backend, request, term: str, targets: list[Target], limit: int) -> dict:
+    hits = backend.search_models(request, term, targets, limit=limit)
     return {
-        "status": list_status((h.confidence, h.match) for h in hits),
+        "status": list_status(hits),
         "more": len(hits) > limit,
         "candidates": [
             {
@@ -348,7 +329,12 @@ def _resolve_models(site, request, term: str, targets: list[Target], limit: int)
     }
 
 
-def _resolve_term(site, request, targets: dict[str, Target], term: dict, limit: int) -> dict:
+def _check_labels(value):
+    if value is not None and (not isinstance(value, list) or not all(isinstance(m, str) for m in value)):
+        raise InvalidArguments("'models' must be a list of model labels.")
+
+
+def _resolve_term(backend, request, targets: dict[str, Target], term: dict, limit: int, default_models) -> dict:
     if not isinstance(term, dict):
         raise InvalidArguments("Each entry of 'terms' must be an object with 'text'.")
     text = term.get("text")
@@ -359,12 +345,14 @@ def _resolve_term(site, request, targets: dict[str, Target], term: dict, limit: 
     kind = term.get("kind", "any")
     if kind not in KINDS:
         raise InvalidArguments(f"'kind' must be one of {', '.join(KINDS)}.")
-    if models_arg is not None and (not isinstance(models_arg, list) or not all(isinstance(m, str) for m in models_arg)):
-        raise InvalidArguments("'models' must be a list of model labels.")
-    narrowed = models_arg is not None or for_field is not None
-    if narrowed and kind == "models":
-        raise InvalidArguments("'models' and 'for_field' narrow an object search; they do not go with kind='models'.")
-    if narrowed:
+    if models_arg is None and for_field is None and kind != "models":
+        models_arg = default_models
+    _check_labels(models_arg)
+    if models_arg is not None or for_field is not None:
+        if kind == "models":
+            raise InvalidArguments(
+                "'models' and 'for_field' narrow an object search; they do not go with kind='models'."
+            )
         kind = "objects"
 
     out: dict = {"term": text}
@@ -376,9 +364,9 @@ def _resolve_term(site, request, targets: dict[str, Target], term: dict, limit: 
         else:
             object_targets = list(targets.values())
         object_targets = [t for t in object_targets if t.search_fields]
-        out["objects"] = _resolve_objects(site, request, text, object_targets, limit)
+        out["objects"] = _resolve_objects(backend, request, text, object_targets, limit)
     if kind in ("any", "models"):
-        out["models"] = _resolve_models(site, request, text, list(targets.values()), limit)
+        out["models"] = _resolve_models(backend, request, text, list(targets.values()), limit)
     return out
 
 
@@ -393,4 +381,7 @@ def resolve_entities(site, request, args) -> dict:
         raise InvalidArguments("'limit' must be an integer.")
     limit = max(1, min(limit, MAX_LIMIT))
     targets = allowed_targets(site, request)
-    return {"results": [_resolve_term(site, request, targets, term, limit) for term in terms]}
+    default_models = args.get("models")
+    _check_labels(default_models)
+    backend = site.get_entity_backend()
+    return {"results": [_resolve_term(backend, request, targets, term, limit, default_models) for term in terms]}
