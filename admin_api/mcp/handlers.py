@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import copy
 import math
-from dataclasses import asdict
+from functools import partial
 
 from django.contrib.admin.utils import NotRelationField, get_fields_from_path
 from django.contrib.admin.views.main import ORDER_VAR, PAGE_VAR, SEARCH_VAR
@@ -17,13 +17,13 @@ from django.db import router, transaction
 from django.http import QueryDict
 from django.utils.translation import gettext
 
-from .. import custom_views, memory, services
+from .. import custom_views, services
 from ..changelist import PER_PAGE_PARAM, SHAPE_PARAM, describe_columns, get_columns
 from ..errors import InvalidArguments, NotFound, PermissionDeniedError
 from ..nested import ModelPath
 from ..scopes import OPS
 from ..writes import ValidationFailed
-from . import confirm, dryrun
+from . import confirm
 from .resolve import DEFAULT_LIMIT, MAX_LIMIT, MAX_TERMS, resolve_entities
 from .tools import (
     ANY_OBJECT,
@@ -220,33 +220,23 @@ def _write_result(data: dict) -> dict:
     return out
 
 
-def _rolled_back(model_admin, request, fn) -> dict:
-    """``fn()`` as a dry run: ``request.is_dry_run``, one transaction rolled back (on_commit callbacks
-    dropped), outgoing mail captured and listed under ``suppressed_emails``."""
+def _dry_run(site, request, model_admin, check, note: str, operation: str, scope: dict, obj) -> dict:
+    """``check()`` (validation only) with ``request.is_dry_run`` set. With ``require_dry_run``, a valid
+    dry run issues the ``confirm_token`` the real write must present."""
     request.is_dry_run = True
     try:
-        with dryrun.capture_mail() as emails, transaction.atomic(using=router.db_for_write(model_admin.model)):
-            out = fn()
-            transaction.set_rollback(True)
+        check()
+    except (ValidationFailed, custom_views.InvalidParams) as exc:
+        return {"dry_run": True, "valid": False, "errors": mcp_keys(exc.extra)}
     finally:
         request.is_dry_run = False
-    if emails:
-        out["suppressed_emails"] = [{"recipients": m.recipients(), "subject": m.subject} for m in emails]
-    return out
-
-
-def _dry_run(model_admin, request, fn) -> dict:
-    """Run ``fn`` (a write service) as a dry run."""
-
-    def validated():
-        try:
-            return {"dry_run": True, "valid": True, **_write_result(fn())}
-        except ValidationFailed as exc:
-            return {"dry_run": True, "valid": False, "errors": mcp_keys(exc.extra)}
-
-    out = _rolled_back(model_admin, request, validated)
-    if out["valid"]:
-        out["note"] = gettext("Nothing was saved; the ID shown is provisional.")
+    out = {"dry_run": True, "valid": True, "note": note}
+    if site.requires_dry_run(model_admin):
+        state = confirm.write_state(model_admin, request, obj)
+        out["confirm_token"] = confirm.issue(site, request, operation, scope, state)
+        out["note"] = gettext(
+            "Valid. Nothing was saved. To save, repeat the call without dry_run and pass this confirm_token."
+        )
     return out
 
 
@@ -254,15 +244,6 @@ def _write_scope(request, **arguments) -> dict:
     """What a confirm token covers: the target model and parents plus the write's own arguments."""
     target = request.admin_api_target
     return {"model": target.path.label, "parents": target.parents, **arguments}
-
-
-def _issue_confirm_token(site, request, out: dict, operation: str, scope: dict, state) -> dict:
-    out["confirm_token"] = confirm.issue(site, request, operation, scope, state)
-    out["note"] = gettext(
-        "Nothing was saved; the ID shown is provisional. To save, repeat the call without dry_run "
-        "and pass this confirm_token."
-    )
-    return out
 
 
 def _confirmed_write(site, request, model_admin, token, operation: str, scope: dict, obj, run):
@@ -275,14 +256,12 @@ def _confirmed_write(site, request, model_admin, token, operation: str, scope: d
 
 
 def _guarded_write(site, request, model_admin, args, run, operation: str, scope: dict, obj=None) -> dict:
-    """A create/update of ``obj`` (``None`` for a create), its permissions already checked: with
-    ``require_dry_run``, a valid dry run issues the ``confirm_token`` that the real write must present."""
-    gated = site.requires_dry_run(model_admin)
+    """A create/update of ``obj`` (``None`` for a create), its permissions already checked. ``run`` is
+    the write service; ``run(dry_run=True)`` validates only."""
     if _arg(args, "dry_run", bool, required=False, default=False):
-        state = confirm.write_state(model_admin, request, obj) if gated else None
-        out = _dry_run(model_admin, request, run)
-        return _issue_confirm_token(site, request, out, operation, scope, state) if gated and out["valid"] else out
-    if gated:
+        note = gettext("Valid. Nothing was saved; totals come with the real write.")
+        return _dry_run(site, request, model_admin, partial(run, dry_run=True), note, operation, scope, obj)
+    if site.requires_dry_run(model_admin):
         token = args.get("confirm_token")
         return _write_result(_confirmed_write(site, request, model_admin, token, operation, scope, obj, run))
     return _write_result(run())
@@ -339,11 +318,10 @@ def execute_view(site, request, model_admin, name, *, pk=None, params=None, dry_
             return _confirmed_write(site, request, model_admin, confirm_token, "run_view", scope, obj, run)
         return run()
     if not spec.writes:
-        return {**run(), "dry_run": True, "note": gettext("A read-only view; nothing to roll back.")}
-    state = confirm.write_state(model_admin, request, obj) if gated else None
-    note = gettext("Nothing was saved: the view ran and was rolled back.")
-    out = _rolled_back(model_admin, request, lambda: {**run(), "dry_run": True, "note": note})
-    return _issue_confirm_token(site, request, out, "run_view", scope, state) if gated else out
+        return {**run(), "dry_run": True, "note": gettext("A read-only view; it ran and changed nothing.")}
+    check = partial(custom_views.clean_params, spec, request, params or {})
+    note = gettext("Valid. The view did not run; nothing was saved.")
+    return _dry_run(site, request, model_admin, check, note, "run_view", scope, obj)
 
 
 # --------------------------------------------------------------------------------------------
@@ -507,7 +485,7 @@ def create_object(site, request, args) -> dict:
         request,
         model_admin,
         args,
-        lambda: services.create(model_admin, request, data),
+        partial(services.create, model_admin, request, data),
         "create_object",
         _write_scope(request, data=data),
     )
@@ -525,7 +503,7 @@ def update_object(site, request, args) -> dict:
         request,
         model_admin,
         args,
-        lambda: services.update(model_admin, request, pk, data, partial=True, obj=obj),
+        partial(services.update, model_admin, request, pk, data, partial=True, obj=obj),
         "update_object",
         _write_scope(request, pk=str(pk), data=data),
         obj,
@@ -578,15 +556,6 @@ def run_view(site, request, args) -> dict:
         dry_run=_arg(args, "dry_run", bool, required=False, default=False),
         confirm_token=args.get("confirm_token"),
     )
-
-
-def set_preference(site, request, args):
-    key = _arg(args, "key", str)
-    request.mcp_memory = memory.set_preference(request.user, key, args.get("value"))
-    return {
-        "preferences": asdict(request.mcp_memory),
-        "note": gettext("Language applies from the next tool call; audience and notes from the next connection."),
-    }
 
 
 # --------------------------------------------------------------------------------------------
@@ -846,7 +815,7 @@ TOOLS = [
                 "params": {"type": "object", "description": "Parameters matching the view's params_schema."},
                 "dry_run": {
                     **DRY_RUN_ARG,
-                    "description": "For views with writes=true: run the view, then roll everything back.",
+                    "description": "For views with writes=true: check permissions and params; the view does not run.",
                 },
                 "confirm_token": CONFIRM_TOKEN_ARG,
             },
@@ -856,25 +825,6 @@ TOOLS = [
         handler=run_view,
         # stays on read-only sites, where write views are hidden and refused
         annotations={"readOnlyHint": False, "destructiveHint": True, "openWorldHint": False},
-    ),
-    ToolSpec(
-        name="set_preference",
-        title="Remember a preference",
-        description="Remember one of the user's own preferences across conversations, when the user asks for it. "
-        "'audience': 'business' (default: plain business wording) or 'developer' (model paths and field names "
-        "allowed). 'language': a language code (e.g. 'en', 'ar') that answers and record names come in. 'notes': "
-        "up to 500 characters the user wants you to know. Send an empty value to clear a preference.",
-        input_schema=obj(
-            {
-                "key": {"type": "string", "enum": list(memory.PREFERENCE_KEYS)},
-                "value": {"type": ["string", "null"], "description": "The new value; empty or null clears it."},
-            },
-            ["key"],
-        ),
-        output_schema=ANY_OBJECT,
-        handler=set_preference,
-        # the user's own preferences, not business data: listed on read-only sites too
-        annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
     ),
 ]
 

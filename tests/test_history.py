@@ -185,7 +185,7 @@ def test_write_view_logs_through_rest(client, superuser, sale):
 
 
 def test_write_view_without_a_change_logs_nothing(call, sale):
-    assert not call("post_sale", {"id": sale.pk, "dry_run": True})[1]  # rolled back
+    assert not call("post_sale", {"id": sale.pk, "dry_run": True})[1]  # the view does not run
     sale.status = "posted"
     sale.save()
     out, err = call("post_sale", {"id": sale.pk})  # ValidationError: Already posted.
