@@ -52,6 +52,11 @@ def test_trigram_pass_finds_a_typo(search_resolve, parties):
     assert out["objects"]["status"] == "ambiguous"  # a single weak candidate asks
 
 
+def test_trigram_pass_takes_three_letter_terms(search_resolve, parties):
+    out = search_resolve({"text": "jon", "models": ["testapp.party"]})
+    assert {c["match"] for c in out["objects"]["candidates"]} == {"fuzzy"}
+
+
 def test_trigram_threshold(search_resolve, parties):
     # word_similarity('jhon', 'john doe') is 0.2, under the 0.4 threshold
     assert search_resolve({"text": "jhon", "models": ["testapp.party"]})["objects"]["status"] == "none"
@@ -64,7 +69,9 @@ def test_trigram_pass_only_fills_up_to_the_limit(search_resolve, parties):
 
 
 def test_arabic_trigrams_under_a_utf8_ctype(parties):
-    assert db_engine.database_ctype() not in db_engine.UNSAFE_CTYPES
+    ctype = query("SELECT datctype FROM pg_database WHERE datname = current_database()")[0][0]
+    assert db_engine.database_ctype() == ctype
+    assert ctype not in db_engine.UNSAFE_CTYPES
     assert query("SELECT word_similarity(%s, %s)", ["اسلا", "اسلام"])[0][0] > 0
 
 

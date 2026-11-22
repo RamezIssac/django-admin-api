@@ -61,7 +61,6 @@ class Migration(migrations.Migration):
             options={
                 "verbose_name_plural": "search entries",
                 "db_table": "admin_api_search_entry",
-                "indexes": [models.Index(fields=["content_type", "object_pk"], name="admin_api_search_entry_obj")],
                 "constraints": [
                     models.UniqueConstraint(
                         fields=("content_type", "object_pk", "field", "language"),
@@ -75,7 +74,6 @@ class Migration(migrations.Migration):
             fields=[
                 ("label", models.CharField(max_length=100, primary_key=True, serialize=False)),
                 ("fingerprint", models.CharField(max_length=64)),
-                ("updated_at", models.DateTimeField(auto_now=True)),
             ],
             options={
                 "db_table": "admin_api_search_state",

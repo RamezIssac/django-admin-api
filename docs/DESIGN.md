@@ -861,6 +861,7 @@ An opt-in app (`INSTALLED_APPS`, label `admin_api_search`) that stores searchabl
   on commit and deletes rows of fields now empty; errors are logged, never raised into the save.
   No `post_delete` receiver: it would disable Django's fast delete for every model, and the
   query-time `EXISTS` hides deleted objects. `post_migrate` replaces the model rows.
+  `indexing_suspended()` (a `ContextVar`, nests) makes `post_save` skip saves in its block.
   `rebuild_search_index` iterates each model's base manager in batches (one transaction each,
   progress per batch), then prunes rows of that model not written by the run. `search_index
   ensure` refreshes model rows and rebuilds models whose fingerprint (index fields, `LANGUAGES`,
@@ -868,22 +869,21 @@ An opt-in app (`INSTALLED_APPS`, label `admin_api_search`) that stores searchabl
   rows.
 - **Engines.** `ADMIN_API_SEARCH = {"DEFAULT_ENGINE": ..., "ENGINES": {name: {"BACKEND", "OPTIONS"}}}`
   merged over the `db` default. Interface `engines.base.SearchEngine`: `upsert(entries)`,
-  `delete_rows(content_type, object_pk, fields=None)`, `replace_model_rows(rows)`,
-  `prune(content_types, older_than)`, `search(query) -> list[Hit]`, `fuzzy_confidence(hit)`, flags
-  `fuzzy` and `scope_pushdown`. `Hit` carries `content_type`, `object_pk`, `field`, `norm`,
-  `engine_score`. One engine holds the rows; with an external engine the table stays empty.
+  `delete_rows(content_type, object_pk, fields)`, `replace_model_rows(rows)`,
+  `prune(content_types, older_than)`, `search(query) -> list[Hit]`, flag `scope_pushdown`. `Hit`
+  carries `content_type`, `object_pk`, `field`, `norm`, `engine_score` (0 to 1). One engine holds the rows; with an external engine the table stays empty.
 - **Query.** The backend turns the tool's targets into scopes (content types incl. owned
   subclasses, the live search fields, code fields, the target queryset with `limit_choices_to`)
   and asks for `limit + 1` candidates (at least 2: enough to tell `unique` from `ambiguous`).
   Engines with `scope_pushdown` scope inside the query. The others get the post-filter path: pages
   of `5 x (limit + 1)` hits, kept when `get_queryset(request).filter(pk__in=...)` holds them, at
   most 3 pages. The core rescores each hit from `norm` with the tool's `match_text`; anything else
-  is `fuzzy` at `0.6 x fuzzy_confidence(hit)`. Labels stay `str(obj)` from the scoped queryset;
+  is `fuzzy` at `0.6 x engine_score`. Labels stay `str(obj)` from the scoped queryset;
   stored `text` never leaves the server. Model labels are read live under the row's language.
 - **`db` engine.** Table `admin_api_search_entry` (`kind`, `content_type`, `object_pk`, `field`,
   `language`, `text`, `norm`, `updated_at` moved only when `norm` changes, `indexed_at` moved on
-  every write for prune), unique (`content_type`, `object_pk`, `field`, `language`), btree
-  (`content_type`, `object_pk`). On Postgres the migration runs `CREATE EXTENSION IF NOT EXISTS
+  every write for prune), unique (`content_type`, `object_pk`, `field`, `language`), which also
+  serves lookups by (`content_type`, `object_pk`). On Postgres the migration runs `CREATE EXTENSION IF NOT EXISTS
   pg_trgm` and a GIN `gin_trgm_ops` index on `norm` (skipped with a warning when the role may not
   create the extension). Upserts are `INSERT ... ON CONFLICT DO UPDATE` on Postgres and SQLite.
   Pass 1: `norm = q` or `LIKE '%q%'` (terms under 3 characters: exact and prefix), ranked in SQL by

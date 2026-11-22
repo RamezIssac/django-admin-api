@@ -15,10 +15,10 @@ from django.db.models.expressions import RawSQL
 from django.db.models.functions import Cast, Lower, Replace
 from django.utils import timezone
 
+from ....mcp.resolve import CONFIDENCE
 from .base import MODEL, OBJECT, Hit, SearchEngine, SearchQuery
 
 UNSAFE_CTYPES = ("C", "POSIX")
-INTEGER_PKS = (models.AutoField, models.BigAutoField, models.SmallAutoField, models.IntegerField)
 UPSERT_VENDORS = ("postgresql", "sqlite")
 UPSERT_BATCH = 500
 
@@ -114,49 +114,22 @@ class DatabaseEngine(SearchEngine):
                 content_type=e.content_type, object_pk=e.object_pk, field=e.field, language=e.language
             ).first()
             if current is None:
-                self.model.objects.create(
-                    kind=e.kind,
-                    content_type=e.content_type,
-                    object_pk=e.object_pk,
-                    field=e.field,
-                    language=e.language,
-                    text=e.text,
-                    norm=e.norm,
-                    updated_at=now,
-                    indexed_at=now,
-                )
+                self.model.objects.create(**vars(e), updated_at=now, indexed_at=now)
                 continue
             if current.norm != e.norm:
                 current.updated_at = now
             current.kind, current.text, current.norm, current.indexed_at = e.kind, e.text, e.norm, now
             current.save()
 
-    def delete_rows(self, content_type, object_pk, fields=None) -> None:
-        rows = self.model.objects.filter(content_type=content_type, object_pk=object_pk)
-        if fields is not None:
-            rows = rows.filter(field__in=list(fields))
-        rows.delete()
+    def delete_rows(self, content_type, object_pk, fields) -> None:
+        self.model.objects.filter(content_type=content_type, object_pk=object_pk, field__in=list(fields)).delete()
 
     def replace_model_rows(self, rows) -> None:
         now = timezone.now()
         with transaction.atomic():
             self.model.objects.filter(kind=MODEL).delete()
             self.model.objects.bulk_create(
-                [
-                    self.model(
-                        kind=MODEL,
-                        content_type=e.content_type,
-                        object_pk=None,
-                        field=e.field,
-                        language=e.language,
-                        text=e.text,
-                        norm=e.norm,
-                        updated_at=now,
-                        indexed_at=now,
-                    )
-                    for e in rows
-                ],
-                batch_size=UPSERT_BATCH,
+                [self.model(**vars(e), updated_at=now, indexed_at=now) for e in rows], batch_size=UPSERT_BATCH
             )
 
     def prune(self, content_types, older_than) -> int:
@@ -172,8 +145,7 @@ class DatabaseEngine(SearchEngine):
             condition = Q(content_type_id__in=ct_ids)
             if query.kind == OBJECT:
                 condition &= Q(field__in=list(scope.fields))
-                if scope.queryset is not None:
-                    condition &= self._exists(scope.queryset, ct_ids, f"_pk{i}", aliases)
+                condition &= self._exists(scope.queryset, ct_ids, f"_pk{i}", aliases)
             conditions.append(condition)
         return rows.alias(**aliases).filter(_any(conditions))
 
@@ -182,7 +154,7 @@ class DatabaseEngine(SearchEngine):
         """``EXISTS`` of the row's object in ``queryset``. The text pk is cast on the outer side
         (the inner pk index stays usable), guarded by the content type."""
         pk = _pk_field(queryset.model)
-        if isinstance(pk, INTEGER_PKS):
+        if isinstance(pk, models.IntegerField):
             target = models.BigIntegerField()
         elif isinstance(pk, models.UUIDField) and connection.vendor == "postgresql":
             target = models.UUIDField()
@@ -207,13 +179,14 @@ class DatabaseEngine(SearchEngine):
             for s in query.scopes
             if s.code_fields
         )
+        word = Q(norm__startswith=f"{q} ") | Q(norm__endswith=f" {q}") | Q(norm__contains=f" {q} ")
         return Case(
-            When(Q(norm=q) & code, then=Value(0.95)),
-            When(norm=q, then=Value(1.0)),
-            When(norm__startswith=q, then=Value(0.85)),
-            When(Q(norm__startswith=f"{q} ") | Q(norm__endswith=f" {q}") | Q(norm__contains=f" {q} "), then=Value(0.8)),
-            When(norm__contains=f" {q}", then=Value(0.75)),
-            default=Value(0.6),
+            When(Q(norm=q) & code, then=Value(CONFIDENCE["exact_code"])),
+            When(norm=q, then=Value(CONFIDENCE["exact"])),
+            When(norm__startswith=q, then=Value(CONFIDENCE["prefix"])),
+            When(word, then=Value(CONFIDENCE["word"])),
+            When(norm__contains=f" {q}", then=Value(CONFIDENCE["word_prefix"])),
+            default=Value(CONFIDENCE["contains"]),
             output_field=FloatField(),
         )
 
@@ -279,9 +252,6 @@ class DatabaseEngine(SearchEngine):
             cursor.execute("SELECT set_config('pg_trgm.word_similarity_threshold', %s, true)", [str(self.threshold)])
             keys = self._top(rows, score, limit)
             return self._rows_of(rows, keys, score)
-
-    def fuzzy_confidence(self, hit: Hit) -> float:
-        return hit.engine_score
 
     def check(self) -> list:
         ctype = database_ctype()

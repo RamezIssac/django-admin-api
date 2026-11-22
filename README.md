@@ -244,6 +244,8 @@ python manage.py search_index ensure      # every deploy, after migrate
   `search_index ensure` refreshes the label rows and rebuilds the models whose index fields, languages
   or engine changed; it exits non-zero on a Postgres database with a `C` or `POSIX` ctype.
   `rebuild_search_index [--model app.Model] [--models-only] [--batch-size 1000]` rebuilds in batches.
+  For a bulk load, save inside `with indexing_suspended():` (`admin_api.contrib.search.indexer`) and
+  run `rebuild_search_index` afterwards; only saves in that thread or task skip the index.
 - The built-in `db` engine works on every database; on Postgres a trigram pass adds `fuzzy` matches
   (confidence `0.6 x word_similarity`, threshold 0.4). Other engines plug in by settings:
 
@@ -259,7 +261,7 @@ ADMIN_API_SEARCH = {
 ```
 
 An engine subclasses `admin_api.contrib.search.engines.base.SearchEngine`: `upsert`, `delete_rows`,
-`replace_model_rows`, `prune`, `search`, `fuzzy_confidence`, and the flags `fuzzy` and
+`replace_model_rows`, `prune`, `search` (hits carry an `engine_score` from 0 to 1), and the flag
 `scope_pushdown`. Engines without `scope_pushdown` get their hits filtered through the admin's
 `get_queryset(request)`.
 

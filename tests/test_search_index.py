@@ -7,9 +7,17 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.management import CommandError, call_command
 from django.test import override_settings
 
-from admin_api.contrib.search.indexer import Indexer, local_field_name
+from admin_api.contrib.search.indexer import (
+    Indexer,
+    _index_saved,
+    indexing_suspended,
+    local_field_name,
+    on_post_migrate,
+    set_indexer,
+)
 from admin_api.contrib.search.models import SearchEntry, SearchIndexState
 from tests.search_site import PartyAdmin, mcp_site
+from tests.testapp import admin as testadmin
 from tests.testapp.models import Client, Party, Sales, Vendor
 
 
@@ -35,7 +43,14 @@ def test_index_fields(indexer):
 
 @pytest.mark.parametrize(
     "search_field, expected",
-    [("^name", "name"), ("=code", "code"), ("name__iexact", "name"), ("client__name", None), ("pk", "id")],
+    [
+        ("^name", "name"),
+        ("=code", "code"),
+        ("name__iexact", "name"),
+        ("name__nope", None),
+        ("client__name", None),
+        ("pk", "id"),
+    ],
 )
 def test_local_field_name(search_field, expected):
     model = Party if search_field != "client__name" else Sales
@@ -70,6 +85,26 @@ def test_save_updates_and_drops_empty_fields(indexed):
         party.name = "Acme Corp"
         party.save()
     assert SearchEntry.objects.get(field="name").updated_at > before
+
+
+def test_saves_inside_indexing_suspended_are_skipped(indexed):
+    with indexed(), indexing_suspended():
+        with indexing_suspended():
+            Client.objects.create(name="Inner")
+        skipped = Client.objects.create(name="Bulk")
+    with indexed():
+        kept = Client.objects.create(name="After")
+    assert rows(Client) == [(str(kept.pk), "name", "after")]
+    call_command("rebuild_search_index", stdout=StringIO())
+    assert (str(skipped.pk), "name", "bulk") in rows(Client)
+
+
+def test_indexing_suspended_is_lifted_after_an_error(indexed):
+    with pytest.raises(ValueError), indexing_suspended():
+        raise ValueError
+    with indexed():
+        kept = Client.objects.create(name="After")
+    assert rows(Client) == [(str(kept.pk), "name", "after")]
 
 
 def test_raw_saves_are_skipped(indexer, django_capture_on_commit_callbacks):
@@ -153,6 +188,35 @@ def test_rebuild_options(indexer):
         call_command("rebuild_search_index", "--batch-size", "0")
 
 
+def test_rebuild_command_output_and_messages(indexer):
+    Party.objects.create(name="Acme")
+    out = StringIO()
+    call_command("rebuild_search_index", "--batch-size", "1", stdout=out)
+    assert out.getvalue().splitlines()[-1] == "rebuilt: testapp.client, testapp.sales, testapp.party, testapp.payment"
+    assert rows(Party, kind="model")  # the object rebuild prunes object rows only
+    out = StringIO()
+    call_command("rebuild_search_index", "--model", "testapp.party", stdout=out)
+    assert out.getvalue().splitlines()[-1] == "rebuilt: testapp.party"
+    with pytest.raises(CommandError, match=r"^--batch-size must be at least 1\.$"):
+        call_command("rebuild_search_index", "--batch-size", "0")
+    indexed = "testapp.client, testapp.party, testapp.payment, testapp.sales"
+    with pytest.raises(CommandError, match=rf"^Not indexed: testapp.tag. Indexed: {indexed}\.$"):
+        call_command("rebuild_search_index", "--model", "testapp.tag")
+    set_indexer(Indexer(sites=[]))
+    with pytest.raises(CommandError, match=r"^Not indexed: testapp.party. Indexed: none\.$"):
+        call_command("rebuild_search_index", "--model", "testapp.party")
+
+
+def test_search_index_needs_an_action_and_takes_a_batch_size(indexer):
+    with pytest.raises(CommandError):
+        call_command("search_index")
+    Party.objects.create(name="Acme")
+    Party.objects.create(name="Acme 2")
+    out = StringIO()
+    call_command("search_index", "ensure", "--batch-size", "1", stdout=out)
+    assert "processed 1/2 testapp.party" in out.getvalue()
+
+
 def test_ensure_rebuilds_only_what_changed(indexer, monkeypatch):
     Party.objects.create(name="Acme", code="AC-1")
     out = StringIO()
@@ -183,11 +247,16 @@ def test_ensure_drops_models_no_longer_indexed(indexer):
 
 
 def test_ensure_refuses_an_unsafe_ctype(indexer, monkeypatch):
-    from admin_api.contrib.search.management.commands import search_index
+    from admin_api.contrib.search.engines import db
 
-    monkeypatch.setattr(search_index, "database_ctype", lambda: "C")
-    with pytest.raises(CommandError, match="LC_CTYPE is 'C'"):
+    monkeypatch.setattr(db, "database_ctype", lambda: "C")
+    message = (
+        "The database LC_CTYPE is 'C': pg_trgm finds no trigrams in non-ASCII words. "
+        "Create the database with a UTF-8 locale such as C.UTF-8 or en_US.UTF-8."
+    )
+    with pytest.raises(CommandError) as raised:
         call_command("search_index", "ensure")
+    assert str(raised.value) == message
 
 
 def test_post_migrate_refreshes_model_rows(indexer):
@@ -196,3 +265,90 @@ def test_post_migrate_refreshes_model_rows(indexer):
     SearchEntry.objects.all().delete()
     on_post_migrate()
     assert rows(Party, kind="model")
+
+
+def test_api_search_fields_add_index_fields(indexer, monkeypatch):
+    monkeypatch.setattr(testadmin.ClientAdmin, "api_search_fields", ["name", "notes"], raising=False)
+    assert Indexer(sites=[mcp_site]).index_fields(Client) == ("name", "notes")
+
+
+def test_polymorphic_ctype_of_a_removed_model(indexer):
+    stale = ContentType.objects.create(app_label="gone", model="thing")
+    party = Party(pk=5, name="Leaf")
+    party.polymorphic_ctype_id = stale.pk
+    assert indexer.row_target(party) == (None, None)
+
+
+def test_object_rows_skip_empty_fields_and_keep_the_raw_text(indexed):
+    with indexed():
+        party = Party.objects.create(name="", code="AC-1")
+    assert rows(Party) == [(str(party.pk), "code", "ac-1")]
+    assert SearchEntry.objects.filter(kind="object").values_list("language", "text").get() == ("", "AC-1")
+
+
+def test_clearing_fields_drops_only_that_objects_rows(indexed):
+    with indexed():
+        client = Client.objects.create(name="Acme")
+        party = Party.objects.create(pk=client.pk, name="Acme", code="AC-1")
+        other = Party.objects.create(name="Other", code="OT-1")
+    with indexed():
+        party.name, party.code = "", ""
+        party.save()
+    assert rows(Party) == [(str(other.pk), "code", "ot-1"), (str(other.pk), "name", "other")]
+    assert rows(Client) == [(str(client.pk), "name", "acme")]
+
+
+def test_portable_upsert_matches_the_native_one(indexed, monkeypatch):
+    from admin_api.contrib.search.engines import db
+
+    monkeypatch.setattr(db, "UPSERT_VENDORS", ())  # the path for databases without ON CONFLICT
+    with indexed():
+        client = Client.objects.create(name="Acme")
+        party = Party.objects.create(pk=client.pk, name="Acme", code="AC-1")
+        other = Party.objects.create(name="Other")
+    pk, other_pk = str(party.pk), str(other.pk)
+    assert rows(Party) == sorted([(pk, "code", "ac-1"), (pk, "name", "acme"), (other_pk, "name", "other")])
+    name = SearchEntry.objects.get(object_pk=pk, field="name", content_type__model="party")
+    with indexed():
+        party.name, party.code = "Acme Co", "AC-2"
+        party.save()
+    assert rows(Party) == sorted([(pk, "code", "ac-2"), (pk, "name", "acme co"), (other_pk, "name", "other")])
+    assert rows(Client) == [(str(client.pk), "name", "acme")]
+    renamed = SearchEntry.objects.get(object_pk=pk, field="name", content_type__model="party")
+    assert renamed.updated_at > name.updated_at and renamed.indexed_at > name.indexed_at
+    with indexed():
+        party.save()  # same text: updated_at stays, indexed_at moves
+    again = SearchEntry.objects.get(object_pk=pk, field="name", content_type__model="party")
+    assert again.updated_at == renamed.updated_at and again.indexed_at > renamed.indexed_at
+    code = SearchEntry.objects.get(object_pk=pk, field="code")
+    assert (code.kind, code.text) == ("object", "AC-2")
+
+
+def test_fingerprint_follows_the_engine(indexer, settings):
+    before = indexer.fingerprint(Party)
+    settings.ADMIN_API_SEARCH = {"ENGINES": {"db": {"BACKEND": "tests.test_search_engines.MemoryEngine"}}}
+    assert indexer.fingerprint(Party) != before
+    db_backend = "admin_api.contrib.search.engines.db.DatabaseEngine"
+    settings.ADMIN_API_SEARCH = {"DEFAULT_ENGINE": "other", "ENGINES": {"other": {"BACKEND": db_backend}}}
+    assert indexer.fingerprint(Party) not in (before, None)
+
+
+def test_ensure_drops_state_of_a_removed_app(indexer):
+    SearchIndexState.objects.create(label="gone.thing", fingerprint="x")
+    out = StringIO()
+    call_command("search_index", "ensure", stdout=out)
+    assert "dropped gone.thing" in out.getvalue()
+    assert not SearchIndexState.objects.filter(label="gone.thing").exists()
+
+
+def test_index_failures_are_logged(indexer, monkeypatch, caplog):
+    def boom(*args):
+        raise RuntimeError("boom")
+
+    party = Party.objects.create(name="Acme")
+    monkeypatch.setattr(indexer, "index_object", boom)
+    _index_saved(indexer, party)
+    assert caplog.records[-1].getMessage() == f"search index: could not index testapp.party {party.pk!r}"
+    monkeypatch.setattr(indexer, "refresh_model_rows", boom)
+    on_post_migrate()
+    assert caplog.records[-1].getMessage() == "search index: could not refresh the model rows"

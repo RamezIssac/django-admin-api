@@ -22,6 +22,7 @@ from admin_api.contrib.search.fold import fold
         ("العملاء", "عملاء"),  # article stripped
         ("مدرسة النور", "مدرسه نور"),  # per word
         ("الى", "الي"),  # too short to strip
+        ("الرز", "رز"),  # two letters after the article: stripped
         ("Müller GmbH", "muller gmbh"),
         ("Straße", "strasse"),
         ("Crème Brûlée", "creme brulee"),

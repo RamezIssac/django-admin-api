@@ -1,21 +1,15 @@
-"""The ``resolve_entities`` backend over the configured search engine.
-
-The core builds the scopes from the tool's allowed targets, asks the engine for candidates and
-scores each hit from its ``norm`` with the tool's own match rules. Engines without
-``scope_pushdown`` get the post-filter path: up to ``5 x limit`` hits per page, kept only when the
-admin's ``get_queryset(request)`` holds the pk, at most 3 pages.
-"""
+"""The ``resolve_entities`` backend over the configured search engine: scopes from the tool's allowed
+targets, candidates from the engine, scores from the tool's own match rules (see docs/DESIGN.md)."""
 
 from __future__ import annotations
 
-from django.apps import apps
-from django.utils import translation
-
-from ...mcp.resolve import CONFIDENCE, DEFAULT_LIMIT, FUZZY_WEIGHT, Hit, _languages, match_text
+from ...mcp.resolve import CODE_FIELDS, CONFIDENCE, DEFAULT_LIMIT, Hit, _languages, match_text
 from .conf import get_engine
 from .engines.base import MODEL, OBJECT, Scope, SearchQuery
 from .fold import fold
-from .indexer import LABEL_FIELDS, code_fields, content_type_of, local_fields, nearest_model
+from .indexer import content_type_of, local_fields, model_names, owned_models
+
+FUZZY_WEIGHT = 0.6  # a fuzzy hit's confidence is the engine's own score (0 to 1) times this
 
 
 class SearchEntityBackend:
@@ -24,15 +18,15 @@ class SearchEntityBackend:
     post_filter_factor = 5
     post_filter_pages = 3
 
-    def __init__(self, site, engine=None):
+    def __init__(self, site):
         self.site = site
-        self.engine = engine or get_engine()
+        self.engine = get_engine()
 
     def _score(self, term: str, hit, code: bool) -> tuple[str, float]:
         match = match_text(term, hit.norm, code=code)
         if match:
             return match, CONFIDENCE[match]
-        return "fuzzy", round(FUZZY_WEIGHT * self.engine.fuzzy_confidence(hit), 2)
+        return "fuzzy", round(FUZZY_WEIGHT * hit.engine_score, 2)
 
     # --- objects --------------------------------------------------------------------------------
     def _scopes(self, targets) -> dict:
@@ -44,14 +38,9 @@ class SearchEntityBackend:
             fields = local_fields(target.model, target.search_fields)
             if not fields:
                 continue
-            owned = [target.model] + [
-                m
-                for m in apps.get_models()
-                if m is not target.model
-                and issubclass(m, target.model)
-                and nearest_model(m, registered) is target.model
-            ]
-            scope = Scope([content_type_of(m) for m in owned], fields, code_fields(target.admin), target.queryset)
+            codes = CODE_FIELDS | frozenset(getattr(target.admin, "search_index_code_fields", None) or ())
+            owned = owned_models(target.model, registered)
+            scope = Scope([content_type_of(m) for m in owned], fields, codes, target.queryset)
             for ct in scope.content_types:
                 by_ct[ct.pk] = (target, scope)
         return by_ct
@@ -107,10 +96,11 @@ class SearchEntityBackend:
     # --- models ---------------------------------------------------------------------------------
     def search_models(self, request, term: str, targets, limit: int = DEFAULT_LIMIT) -> list[Hit]:
         wanted = fold(term)
-        by_ct = {content_type_of(t.model).pk: t for t in targets}
+        content_types = [content_type_of(t.model) for t in targets]
+        by_ct = {ct.pk: t for ct, t in zip(content_types, targets)}
         if not wanted or not by_ct:
             return []
-        scope = Scope([content_type_of(t.model) for t in targets])
+        scope = Scope(content_types)
         engine_hits = self.engine.search(SearchQuery(wanted, MODEL, [scope], limit=max(limit + 1, 2)))
         best: dict = {}
         for engine_hit in engine_hits:
@@ -127,10 +117,7 @@ class SearchEntityBackend:
 def model_label_text(target, norm: str) -> tuple[str, str | None]:
     """The label string and language whose folded form is ``norm``, read live."""
     for language in _languages():
-        with translation.override(language):
-            names = [str(getattr(target.model._meta, f)) for f in LABEL_FIELDS]
-        names += list((getattr(target.admin, "search_aliases", None) or {}).get(language, ()))
-        for name in names:
+        for _field, name in model_names(target.model, [target.admin], language):
             if fold(name) == norm:
                 return name, language
     return norm, None

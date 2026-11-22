@@ -1,22 +1,23 @@
 """The engine seam: ADMIN_API_SEARCH settings and the post-filter path of engines without scope_pushdown."""
 
+from dataclasses import replace
 from io import StringIO
 
 import pytest
 from django.core.exceptions import ImproperlyConfigured
 from django.core.management import call_command
+from django.db import connection
 
 from admin_api.contrib.search.conf import get_engine, search_settings
 from admin_api.contrib.search.engines.base import Hit, SearchEngine
 from admin_api.contrib.search.engines.db import DatabaseEngine
 from tests.search_site import picks
-from tests.testapp.models import Client
+from tests.testapp.models import Client, Party
 
 
 class MemoryEngine(SearchEngine):
     """Rows in a dict, substring matching, insertion order, no scoping of its own."""
 
-    fuzzy = True
     scope_pushdown = False
 
     def __init__(self, name="", options=None):
@@ -27,10 +28,9 @@ class MemoryEngine(SearchEngine):
         for e in entries:
             self.rows[(e.kind, e.content_type.pk, e.object_pk, e.field, e.language)] = e
 
-    def delete_rows(self, content_type, object_pk, fields=None):
-        for key in [k for k in self.rows if k[1] == content_type.pk and k[2] == object_pk]:
-            if fields is None or key[3] in fields:
-                del self.rows[key]
+    def delete_rows(self, content_type, object_pk, fields):
+        for key in [k for k in self.rows if k[1] == content_type.pk and k[2] == object_pk and k[3] in fields]:
+            del self.rows[key]
 
     def replace_model_rows(self, rows):
         self.rows = {k: v for k, v in self.rows.items() if k[0] != "model"}
@@ -57,9 +57,6 @@ class MemoryEngine(SearchEngine):
             for e in found
             if (e.content_type.pk, e.object_pk) in page
         ]
-
-    def fuzzy_confidence(self, hit):
-        return hit.engine_score
 
 
 @pytest.fixture
@@ -115,3 +112,40 @@ def test_fuzzy_hits_score_from_the_engine(memory, search_resolve, indexer):
     call_command("rebuild_search_index", stdout=StringIO())
     out = search_resolve({"text": "amx", "models": ["testapp.client"]})
     assert picks(out["objects"], "label", "match", "confidence") == [("Amadeus", "fuzzy", 0.3)]
+
+
+def test_fuzzy_confidence_rounds_to_two_places(memory, search_resolve, indexer, monkeypatch):
+    Client.objects.create(name="Amadeus")
+    call_command("rebuild_search_index", stdout=StringIO())
+    search = memory.search
+    monkeypatch.setattr(memory, "search", lambda query: [replace(h, engine_score=0.777) for h in search(query)])
+    out = search_resolve({"text": "amx", "models": ["testapp.client"]})
+    assert picks(out["objects"], "match", "confidence") == [("fuzzy", 0.47)]
+
+
+def test_post_filter_checks_each_model_against_its_own_queryset(memory, search_resolve, indexer):
+    client = Client.objects.create(name="Azed")
+    party = Party.objects.create(name="Zed works")
+    call_command("rebuild_search_index", stdout=StringIO())
+    out = search_resolve({"text": "zed", "models": ["testapp.client", "testapp.party"]})
+    assert sorted(picks(out["objects"], "model", "id")) == [("testapp.client", client.pk), ("testapp.party", party.pk)]
+
+
+def test_post_filter_stops_once_it_has_enough(memory, search_resolve, indexer):
+    for i in range(8):
+        Client.objects.create(name=f"Bzed {i}")
+    visible = [Client.objects.create(name=f"Azed {i}") for i in range(2)]
+    call_command("rebuild_search_index", stdout=StringIO())
+    memory.queries.clear()
+    out = search_resolve({"text": "zed", "models": ["testapp.client"]}, limit=1)
+    # one full page of 10 holds the 2 candidates limit 1 asks for: no second page
+    assert [(q.offset, q.limit) for q in memory.queries if q.kind == "object"] == [(0, 10)]
+    assert picks(out["objects"], "id") == [(visible[0].pk,)]
+
+
+def test_database_engine_options(db):
+    engine = DatabaseEngine("db", {"TRIGRAM_THRESHOLD": "0.6"})
+    assert (engine.name, engine.threshold) == ("db", 0.6)
+    assert DatabaseEngine().threshold == 0.4
+    assert get_engine().name == "db"
+    assert engine.fuzzy is (connection.vendor == "postgresql")

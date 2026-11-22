@@ -70,9 +70,11 @@
 - Commands `rebuild_search_index [--model] [--models-only] [--batch-size]` and `search_index ensure`
   (fingerprint-gated rebuild; exits non-zero on a `C` / `POSIX` database ctype). System check
   `admin_api_search.W001` warns about that ctype.
+- `admin_api.contrib.search.indexer.indexing_suspended()`: a context manager for bulk loads; saves
+  inside it (this thread or task) skip the index until `rebuild_search_index` runs.
 - Admin hooks `get_search_index_fields()`, `search_index_code_fields`, `search_aliases`.
-- `AdminMcpSite.entity_backend_class` defaults to `None`: the search backend when the app is
-  installed, else `LiveEntityBackend`. Backends receive `limit=` in `search_objects` and
+- Installing the app sets `AdminMcpSite.entity_backend_class` to `SearchEntityBackend`; sites that
+  set their own keep it. Backends receive `limit=` in `search_objects` and
   `search_models`.
 - CI runs the search tests on Postgres 17 (nox session `tests_postgres`).
 - MCP `list_objects` pages through at most `AdminMcpSite.list_max_rows` records of a query (default
