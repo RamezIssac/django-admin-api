@@ -80,9 +80,6 @@
 - MCP `list_objects` pages through at most `AdminMcpSite.list_max_rows` records of a query (default
   1000, `None` for no cap). A larger query reports only the reachable `pages` and adds a `hint`
   pointing at reports, filters and search; a page past the cap answers `invalid_arguments`.
-
-## 0.1.0a3 (2026-11-19)
-
 - **MCP dry runs capture e-mail.** A dry run rolled back the database but still delivered mail
   sent from `save()`, a signal or a write view. Now every e-mail backend opened during a dry run
   collects its messages, and the result lists them as `suppressed_emails` (`recipients`,
@@ -92,6 +89,14 @@
   adds state stored outside the object's row, such as the last row of a status log, to the
   `require_dry_run` confirm-token fingerprint. A concurrent change to that state now gets 409
   `invalid_confirm_token`.
+- **MCP `run_action` with `delete_selected` needs `confirm=true`**, like `delete_object`. Without it
+  the tool returns the selection's `count`, a `preview` (`to_delete`, `model_count`, `perms_needed`,
+  `protected`, `can_delete`) and `confirm_required`, and deletes nothing. REST actions are unchanged.
+- Action descriptions are formatted like the admin's action menu: `delete_selected` reads
+  "Delete selected sales", not "Delete selected %(verbose_name_plural)s".
+
+## 0.1.0a3 (2026-11-19)
+
 - **The MCP `confirm_token` is single-use and bound to the object's state.** It was a stateless
   signature, valid 15 minutes for any number of writes: one dry run allowed repeated writes, from
   any API token of the same user, after the object changed. Now the dry run stores a random `jti`

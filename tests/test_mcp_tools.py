@@ -304,6 +304,36 @@ def test_delete_needs_confirm(call, data):
     assert not Sales.objects.filter(pk=sale.pk).exists()
 
 
+def test_delete_selected_needs_confirm(call, data, mcp):
+    assert mcp.get_tool("run_action").input_schema["properties"]["confirm"]["default"] is False
+    args = {"model": "testapp.sales", "action": "delete_selected", "ids": [s.pk for s in data["sales"][:2]]}
+    out, err = call("run_action", args)
+    assert not err and out["confirm_required"] is True and out["count"] == 2
+    assert out["note"] == "Nothing was deleted. Call again with confirm=true to delete."
+    assert out["preview"]["model_count"] == {"sales": 2, "sales items": 1} and out["preview"]["can_delete"] is True
+    assert Sales.objects.count() == 5
+    out, err = call("run_action", {**args, "confirm": True})
+    assert not err and out["count"] == 2 and "confirm_required" not in out
+    assert sorted(Sales.objects.values_list("slug", flat=True)) == ["S-3", "S-4", "S-5"]
+
+
+def test_delete_selected_twin_runs_without_preview(call, data, monkeypatch):
+    def api_delete_selected(request, queryset):
+        return {"kept": queryset.count()}
+
+    monkeypatch.setattr(testadmin.SalesAdmin, "api_delete_selected", staticmethod(api_delete_selected), raising=False)
+    args = {"model": "testapp.sales", "action": "delete_selected", "ids": [data["sales"][0].pk]}
+    out, err = call("run_action", args)
+    assert not err and out["result"] == {"kept": 1} and "confirm_required" not in out
+
+
+def test_delete_selected_preview_follows_filters(call, data):
+    args = {"model": "testapp.sales", "action": "delete_selected", "all": True, "filters": {"status__exact": "draft"}}
+    out, err = call("run_action", args)
+    assert not err and out["count"] == 2 and out["preview"]["model_count"] == {"sales": 2}
+    assert Sales.objects.count() == 5
+
+
 def test_run_action(call, data):
     drafts = [s.pk for s in data["sales"] if s.status == "draft"]
     out, err = call("run_action", {"model": "testapp.sales", "action": "mark_posted", "pks": drafts})

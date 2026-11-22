@@ -524,6 +524,10 @@ def update_object(site, request, args) -> dict:
     )
 
 
+def _not_deleted_note() -> str:
+    return gettext("Nothing was deleted. Call again with confirm=true to delete.")
+
+
 def delete_object(site, request, args) -> dict:
     _ensure_writable(site)
     model_admin, _label = _model_admin(site, request, args)
@@ -534,7 +538,7 @@ def delete_object(site, request, args) -> dict:
             "deleted": False,
             "confirm_required": True,
             "preview": mcp_keys(preview),
-            "note": gettext("Nothing was deleted. Call again with confirm=true to delete."),
+            "note": _not_deleted_note(),
         }
     return {"deleted": True, "object": mcp_keys(services.delete(model_admin, request, pk)["deleted"])}
 
@@ -548,7 +552,10 @@ def run_action(site, request, args) -> dict:
         payload["all"] = True
     else:
         payload["pks"] = _arg({"ids": args.get("ids", args.get("pks"))}, "ids", list, required=False, default=[])
-    return mcp_keys(services.run_action(model_admin, _with_query(request, _filters_query(args)), action, payload))
+    confirm = _arg(args, "confirm", bool, required=False, default=False)
+    request = _with_query(request, _filters_query(args))
+    out = mcp_keys(services.run_action(model_admin, request, action, payload, delete_preview=not confirm))
+    return {**out, "confirm_required": True, "note": _not_deleted_note()} if "preview" in out else out
 
 
 def run_view(site, request, args) -> dict:
@@ -767,7 +774,8 @@ TOOLS = [
         name="run_action",
         title="Run an admin action",
         description="Run one of the model's admin actions (listed by describe_model) on the given ids, or on "
-        "all objects matching 'filters' with all=true. Actions have no dry run.",
+        "all objects matching 'filters' with all=true. Actions have no dry run; delete_selected without "
+        "confirm=true returns what would be deleted and deletes nothing.",
         input_schema=obj(
             {
                 "model": MODEL_ARG,
@@ -777,6 +785,11 @@ TOOLS = [
                 "pks": {"type": "array", "items": ID_ARG, "description": "Deprecated alias of 'ids'."},
                 "all": {"type": "boolean", "default": False, "description": "Run on all objects matching filters."},
                 "filters": FILTERS_ARG,
+                "confirm": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "For delete_selected: actually delete.",
+                },
             },
             ["model", "action"],
         ),

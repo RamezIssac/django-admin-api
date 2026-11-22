@@ -115,3 +115,4 @@ class TestActions:
         actions = {a["name"]: a for a in body["actions"]}
         assert {"delete_selected", "mark_posted", "export_csv", "boom"} <= set(actions)
         assert actions["export_csv"]["api_twin"] is True and actions["mark_posted"]["api_twin"] is False
+        assert actions["delete_selected"]["description"] == "Delete selected sales"

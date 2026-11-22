@@ -308,6 +308,8 @@ def test_mcp_writes(call, data):
     out, err = call("delete_object", {**args, "pk": s1.pk, "confirm": True})
     assert not err and out["deleted"]
     out, err = call("run_action", {**args, "action": "delete_selected", "all": True})
+    assert not err and out["confirm_required"] and out["count"] == 2
+    out, err = call("run_action", {**args, "action": "delete_selected", "all": True, "confirm": True})
     assert not err and out["count"] == 2
     assert list(Sales.objects.values_list("slug", flat=True)) == ["S-3"]
 

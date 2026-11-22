@@ -285,7 +285,8 @@ An engine subclasses `admin_api.contrib.search.engines.base.SearchEngine`: `upse
   `obj` is `None` for a create) and the token is bound to it too.
   Permissions are checked first: a user who may not write gets 403, not 409.
   An admin overrides the site with `mcp_require_dry_run = True | False`. `delete_object` keeps its
-  `confirm`; `run_action` has no dry run and is not gated.
+  `confirm`; `run_action` has no dry run and is not gated, and its `delete_selected` previews
+  unless `confirm=true`.
 - **Audit.** The LogEntry of an MCP create or update reads, for example, `Changed Status. Via MCP.`
   Every tool call is logged at INFO to the `admin_api.mcp.audit` logger: tool, user pk, token
   prefix, IP, model, pk, view, action, pks, `all`, `dry_run`, `confirm` and the outcome (`ok` or the

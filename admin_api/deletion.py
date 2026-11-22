@@ -20,16 +20,20 @@ def _text(value):
     return html.unescape(strip_tags(str(value)))
 
 
-def delete_preview(model_admin, request, obj) -> dict:
-    to_delete, model_count, perms_needed, protected = model_admin.get_deleted_objects([obj], request)
+def deletion_summary(model_admin, request, objs) -> dict:
+    """What deleting ``objs`` would remove, as the admin's delete confirmation page lists it."""
+    to_delete, model_count, perms_needed, protected = model_admin.get_deleted_objects(objs, request)
     return {
-        "object": encode_value(obj),
         "to_delete": _text(to_delete),
         "model_count": {str(k): v for k, v in model_count.items()},
         "perms_needed": sorted(str(p) for p in perms_needed),
         "protected": _text(list(protected)),
         "can_delete": not perms_needed and not protected,
     }
+
+
+def delete_preview(model_admin, request, obj) -> dict:
+    return {"object": encode_value(obj), **deletion_summary(model_admin, request, [obj])}
 
 
 def _log_deletion(model_admin, request, obj):

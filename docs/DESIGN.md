@@ -658,7 +658,7 @@ urlpatterns += [path("mcp/", mcp_site.urls)]
 | `create_object` | `model`, `data`, `dry_run` | `services.create` |
 | `update_object` | `model`, `id`, `data`, `dry_run` | `services.update(partial=True)` |
 | `delete_object` | `model`, `id`, `confirm` | preview unless `confirm` |
-| `run_action` | `model`, `action`, `ids[]` or `all` + `filters{}` | `services.run_action` (no dry run) |
+| `run_action` | `model`, `action`, `ids[]` or `all` + `filters{}`, `confirm` | `services.run_action` (no dry run; `delete_selected` without `confirm` returns `deletion.deletion_summary` of the selection) |
 | `run_view` | `model`, `view`, `id?`, `params{}`, `dry_run` | `services.run_view` (§16) |
 | *view tools* | `id?`, the view's params, `dry_run?` | views with `mcp_tool=` (§16) |
 | `set_preference` | `key`, `value` | the caller's own `McpUserMemory` preference row (§14.11) |
@@ -766,8 +766,8 @@ or the object changed).
 - 404 and 403 come before the 409: the handlers load the object and run the write's permission
   and scope checks (`services.check_add_permission` / `check_change_permission`,
   `custom_views.check_view_permission`) before `confirm.verify`.
-- An invalid dry run returns no token. `delete_object` (has `confirm`), `run_action` (no dry run)
-  and read tools are not gated.
+- An invalid dry run returns no token. `delete_object` and `run_action`'s `delete_selected` (both
+  have `confirm`), other actions (no dry run) and read tools are not gated.
 
 **Audit log.** `AdminMcpSite.call_tool` logs one INFO record per call to `admin_api.mcp.audit`
 (`extra={"mcp_audit": {...}}`): tool, user pk, token prefix, `REMOTE_ADDR`, model, pk, view,
