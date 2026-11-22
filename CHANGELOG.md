@@ -45,6 +45,28 @@
 - `AdminMcpSite.get_instructions(request)` (sent at `initialize`; the HTTP view builds one SDK
   `Server` per request) and `AdminMcpSite.get_language(request)` (default `None`: keep the active
   language), which wraps `call_tool` and `get_tools` in `translation.override`.
+- **New opt-in app `admin_api.contrib.search`** (§14.10): a search index behind `resolve_entities`.
+  One row per (object, search field) and per (model, label, language), text folded by `fold()`
+  (accents, case, Arabic letter variants, digits, the Arabic article). Rows follow the MCP-exposed
+  admins' local `search_fields` / `api_search_fields` and `Meta` labels under every `LANGUAGES` code.
+  Saves update rows on commit; `post_migrate` refreshes the label rows. Hits are scoped like the live
+  backend (exposure, permissions, token scopes, `excluded_models`, live search fields) and checked
+  against the admin's `get_queryset(request)` inside the query. Run `migrate`, then
+  `search_index ensure` on every deploy.
+- Pluggable engines through `ADMIN_API_SEARCH` (`DEFAULT_ENGINE`, `ENGINES`), interface
+  `engines.base.SearchEngine`. The built-in `db` engine (`admin_api_search_entry` table) runs on every
+  database; on Postgres the migration installs `pg_trgm` and a GIN index, and a trigram pass adds
+  `fuzzy` matches.
+- Commands `rebuild_search_index [--model] [--models-only] [--batch-size]` and `search_index ensure`
+  (fingerprint-gated rebuild; exits non-zero on a `C` / `POSIX` database ctype). System check
+  `admin_api_search.W001` warns about that ctype.
+- `admin_api.contrib.search.indexer.indexing_suspended()`: a context manager for bulk loads; saves
+  inside it (this thread or task) skip the index until `rebuild_search_index` runs.
+- Admin hooks `get_search_index_fields()`, `search_index_code_fields`, `search_aliases`.
+- Installing the app sets `AdminMcpSite.entity_backend_class` to `SearchEntityBackend`; sites that
+  set their own keep it. Backends receive `limit=` in `search_objects` and
+  `search_models`.
+- CI runs the search tests on Postgres 17 (nox session `tests_postgres`).
 
 ## 0.1.0a3 (2026-11-19)
 

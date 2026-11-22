@@ -3,6 +3,9 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.test import RequestFactory
 
+from admin_api.contrib.search.indexer import Indexer, set_indexer
+from admin_api.models import ApiToken
+from tests.search_site import mcp_site
 from tests.testapp.admin import site
 from tests.testapp.models import Client, Sales
 
@@ -51,3 +54,35 @@ def staff_view_clients(db):
 @pytest.fixture
 def plain_user(db):
     return get_user_model().objects.create_user("plain", "p@x.io", "pw")
+
+
+# --- search contrib (tests/test_search_*.py) ---------------------------------------------------
+@pytest.fixture
+def indexer(db):
+    indexer = Indexer(sites=[mcp_site])
+    set_indexer(indexer)
+    yield indexer
+    set_indexer(None)
+
+
+@pytest.fixture
+def indexed(indexer, django_capture_on_commit_callbacks):
+    """Create objects inside this context manager: their post_save rows are written on exit."""
+    return lambda: django_capture_on_commit_callbacks(execute=True)
+
+
+@pytest.fixture
+def search_resolve(rf, superuser, indexer):
+    def do(*terms, user=superuser, site=None, scopes=None, **args):
+        site = site or mcp_site
+        request = rf.post("/mcp/")
+        request.user = user
+        if scopes is not None:
+            request.api_token = ApiToken.objects.create_token(user, "t", scopes=scopes)[0]
+        terms = [t if isinstance(t, dict) else {"text": t} for t in terms]
+        result = site.call_tool(request, "resolve_entities", {"terms": terms, **args})
+        if result.is_error:
+            return result.data
+        return result.data["results"][0] if len(terms) == 1 else result.data["results"]
+
+    return do
