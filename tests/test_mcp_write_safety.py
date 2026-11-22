@@ -328,7 +328,9 @@ def test_admin_override_beats_the_site_setting(call, gated, ahmed, monkeypatch):
     out, err = call(gated, "create_object", create_args(ahmed))
     assert not err, out
     monkeypatch.setattr(type(sales_admin), "mcp_require_dry_run", True)
-    out, err = call(AdminMcpSite(api_site), "update_object", {"model": "testapp.sales", "pk": 1, "data": {}})
+    out, err = call(
+        AdminMcpSite(api_site), "update_object", {"model": "testapp.sales", "pk": Sales.objects.first().pk, "data": {}}
+    )
     assert err and out["error"] == "dry_run_required"
 
 

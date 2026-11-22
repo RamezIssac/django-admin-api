@@ -247,3 +247,5 @@ uv run pytest                    # everything; -m "not conformance" skips the li
 uvx nox                          # lint + matrix: Django 4.2 / 5.2 / 6.1 x mcp 2.3.0 / latest (+ django-subadmin on 5.2 / 6.1)
 uvx nox -l                       # list sessions; run one with -s "tests(django=6.1, mcp=latest)"
 ```
+
+Mutation testing of a branch's changed lines: see [CONTRIBUTING.md](CONTRIBUTING.md#mutation-testing).

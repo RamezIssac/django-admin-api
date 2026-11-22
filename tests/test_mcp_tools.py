@@ -300,7 +300,11 @@ def test_permissions_and_scopes(call, data, superuser):
     out, _ = call("list_models", user=clerk)
     assert [m["model"] for m in out["models"]] == ["testapp.sales"]
 
-    out, err = call("update_object", {"model": "testapp.sales", "pk": 1, "data": {}}, scopes=["testapp.sales:view"])
+    out, err = call(
+        "update_object",
+        {"model": "testapp.sales", "pk": data["sales"][0].pk, "data": {}},
+        scopes=["testapp.sales:view"],
+    )
     assert err and out["error"] == "permission_denied"
     out, err = call("list_objects", {"model": "testapp.client"}, scopes=["testapp.sales:view"])
     assert err and out["error"] == "permission_denied"
