@@ -17,10 +17,7 @@ class ApiError(Exception):
         self.extra = extra
 
     def as_response(self) -> JsonResponse:
-        payload = {"error": self.code}
-        if self.detail:
-            payload["detail"] = self.detail
-        payload.update(self.extra)
+        payload = {"error": self.code, **({"detail": self.detail} if self.detail else {}), **self.extra}
         return JsonResponse(payload, status=self.status)
 
 
