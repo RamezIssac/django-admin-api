@@ -45,7 +45,7 @@ def get_model_admin(api_site, request, app_label: str, model_name: str, *, segme
     path = ModelPath(app_label, model_name, tuple(segments))
     chain = api_site.get_admin_chain(path)
     if chain is None:
-        raise NotFound(gettext("This kind of record is not available here."))
+        raise NotFound()
     model_admin = chain[-1]
     parents = list(parents or ())
     if len(parents) != path.depth:
@@ -332,8 +332,7 @@ def detail(model_admin, request, object_id) -> dict:
     from .detail import serialize_object
 
     obj = get_object(model_admin, request, object_id)
-    if not model_admin.has_view_or_change_permission(request, obj):
-        raise PermissionDeniedError(_denied(gettext("You may not view this %(model)s."), model_admin))
+    check_view_permission(model_admin, request, obj)
     payload = serialize_object(model_admin, request, obj)
     children = child_links(request, model_admin, payload["pk"])
     if children:
@@ -376,6 +375,17 @@ def _load(payload):
     return payload() if callable(payload) else payload
 
 
+def check_view_permission(model_admin, request, obj) -> None:
+    if not model_admin.has_view_or_change_permission(request, obj):
+        raise PermissionDeniedError(_denied(gettext("You may not view this %(model)s."), model_admin))
+
+
+def check_delete_permission(model_admin, request, obj) -> None:
+    if not model_admin.has_delete_permission(request, obj):
+        raise PermissionDeniedError(_denied(gettext("You may not delete this %(model)s."), model_admin))
+    scopes.check(request, model_admin.opts, "delete")
+
+
 def check_add_permission(model_admin, request) -> None:
     if not model_admin.has_add_permission(request):
         raise PermissionDeniedError(_denied(gettext("You may not add %(models)s."), model_admin))
@@ -411,9 +421,7 @@ def delete(model_admin, request, object_id) -> dict:
     from .deletion import delete_object
 
     obj = get_object(model_admin, request, object_id)
-    if not model_admin.has_delete_permission(request, obj):
-        raise PermissionDeniedError(_denied(gettext("You may not delete this %(model)s."), model_admin))
-    scopes.check(request, model_admin.opts, "delete")
+    check_delete_permission(model_admin, request, obj)
     return {"deleted": delete_object(model_admin, request, obj)}
 
 
@@ -421,9 +429,7 @@ def delete_preview(model_admin, request, object_id) -> dict:
     from .deletion import delete_preview as _preview
 
     obj = get_object(model_admin, request, object_id)
-    if not model_admin.has_delete_permission(request, obj):
-        raise PermissionDeniedError(_denied(gettext("You may not delete this %(model)s."), model_admin))
-    scopes.check(request, model_admin.opts, "delete")
+    check_delete_permission(model_admin, request, obj)
     return _preview(model_admin, request, obj)
 
 

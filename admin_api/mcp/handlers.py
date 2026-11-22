@@ -13,7 +13,7 @@ from django.contrib.admin.views.main import ORDER_VAR, PAGE_VAR, SEARCH_VAR
 from django.core.exceptions import FieldDoesNotExist
 from django.db import router, transaction
 from django.http import QueryDict
-from django.utils.translation import gettext, gettext_noop
+from django.utils.translation import gettext
 
 from .. import custom_views, memory, services
 from ..changelist import PER_PAGE_PARAM, SHAPE_PARAM, describe_columns, get_columns
@@ -37,7 +37,6 @@ from .tools import (
 )
 
 RESERVED_FILTER_KEYS = frozenset({SEARCH_VAR, ORDER_VAR, PAGE_VAR, SHAPE_PARAM, PER_PAGE_PARAM, "all"})
-NOT_AVAILABLE = gettext_noop("This kind of record is not available here.")
 
 
 # --------------------------------------------------------------------------------------------
@@ -56,23 +55,9 @@ def _arg(args: dict, name: str, types=None, *, required=True, default=None):
 
 def _id_arg(args: dict, *, required=True):
     """The record ID argument: ``id``, or its deprecated alias ``pk``."""
-    value = args.get("id", args.get("pk"))
-    if value is None:
-        if required:
-            raise InvalidArguments("'id' is required.")
-        return None
-    if isinstance(value, bool) or not isinstance(value, (int, str)):
+    value = _arg({"id": args.get("id", args.get("pk"))}, "id", (int, str), required=required)
+    if isinstance(value, bool):
         raise InvalidArguments("'id' has the wrong type.")
-    return value
-
-
-def _ids_arg(args: dict) -> list:
-    """The record IDs argument: ``ids``, or its deprecated alias ``pks``."""
-    value = args.get("ids", args.get("pks"))
-    if value is None:
-        return []
-    if not isinstance(value, list):
-        raise InvalidArguments("'ids' has the wrong type.")
     return value
 
 
@@ -124,7 +109,7 @@ def _model_admin(site, request, args):
         raise InvalidArguments("'parents' must be a list of IDs.")
     chain = site.api_site.get_admin_chain(path)
     if chain is not None and not all(site.is_exposed(a) for a in chain):
-        raise NotFound(gettext(NOT_AVAILABLE))
+        raise NotFound()
     model_admin = services.get_model_admin_by_label(site.api_site, request, path.label, parents)
     return model_admin, path.label
 
@@ -383,10 +368,7 @@ def describe_model(site, request, args) -> dict:
     instance = None
     if pk is not None:
         instance = services.get_object(model_admin, request, pk)
-        if not model_admin.has_view_or_change_permission(request, instance):
-            raise PermissionDeniedError(
-                gettext("You may not view this %(model)s.") % {"model": model_admin.opts.verbose_name}
-            )
+        services.check_view_permission(model_admin, request, instance)
 
     schema = services.schema(site.api_site, model_admin, _with_query(request, QueryDict(mutable=True)))
     out = {
@@ -541,7 +523,7 @@ def run_action(site, request, args) -> dict:
     if _arg(args, "all", bool, required=False, default=False):
         payload["all"] = True
     else:
-        payload["pks"] = _ids_arg(args)
+        payload["pks"] = _arg({"ids": args.get("ids", args.get("pks"))}, "ids", list, required=False, default=[])
     return mcp_keys(services.run_action(model_admin, _with_query(request, _filters_query(args)), action, payload))
 
 
@@ -857,7 +839,7 @@ def view_tool(site, model_admin, spec) -> ToolSpec:
     def handler(site, request, args):
         model_admin = services.get_model_admin_by_label(site.api_site, request, label)
         if not site.is_exposed(model_admin):
-            raise NotFound(gettext(NOT_AVAILABLE))
+            raise NotFound()
         params = {k: v for k, v in args.items() if k not in reserved}
         pk = (args.get("id", args.get("pk")) if id_name == "id" else args.get("pk")) if spec.detail else None
         if spec.detail and pk is None:
