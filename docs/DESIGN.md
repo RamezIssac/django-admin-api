@@ -652,16 +652,29 @@ urlpatterns += [path("mcp/", mcp_site.urls)]
 | Tool | Arguments | Backed by |
 |---|---|---|
 | `list_models` | – | `services.registry` + `mcp_description` |
-| `describe_model` | `model`, `pk?` | `services.schema` + `input_schemas` (per object with `pk`) |
+| `describe_model` | `model`, `id?` | `services.schema` + `input_schemas` (per object with `id`) |
 | `list_objects` | `model`, `filters{}`, `search`, `ordering[]`, `page`, `per_page` | `services.changelist`, always columnar, 25/page default |
-| `get_object` | `model`, `pk` | `services.detail` |
+| `get_object` | `model`, `id` | `services.detail` |
 | `create_object` | `model`, `data`, `dry_run` | `services.create` |
-| `update_object` | `model`, `pk`, `data`, `dry_run` | `services.update(partial=True)` |
-| `delete_object` | `model`, `pk`, `confirm` | preview unless `confirm` |
-| `run_action` | `model`, `action`, `pks[]` or `all` + `filters{}` | `services.run_action` (no dry run) |
-| `run_view` | `model`, `view`, `pk?`, `params{}`, `dry_run` | `services.run_view` (§16) |
-| *view tools* | `pk?`, the view's params, `dry_run?` | views with `mcp_tool=` (§16) |
+| `update_object` | `model`, `id`, `data`, `dry_run` | `services.update(partial=True)` |
+| `delete_object` | `model`, `id`, `confirm` | preview unless `confirm` |
+| `run_action` | `model`, `action`, `ids[]` or `all` + `filters{}` | `services.run_action` (no dry run) |
+| `run_view` | `model`, `view`, `id?`, `params{}`, `dry_run` | `services.run_view` (§16) |
+| *view tools* | `id?`, the view's params, `dry_run?` | views with `mcp_tool=` (§16) |
+| `set_preference` | `key`, `value` | the caller's own `McpUserMemory` preference row (§14.11) |
 
+- MCP speaks `id` and `label` where REST speaks `pk` and `str` (0.1.0a4): object heads, inline
+  rows, every related record (`{"id", "label"}`), `list_objects` `columns[0]`, `describe_model`
+  `id_field`. The arguments `pk` and `pks` stay accepted as aliases of `id` and `ids` for one
+  release; an inline row sent with `id` updates that row. The rename lives in
+  `admin_api/mcp/handlers.py` (`mcp_keys`); services and REST keep `pk`/`str`.
+- Messages name records by verbose name and say "ID" (`"No sales with ID 9."`). Unknown, hidden
+  and excluded models all answer `"This kind of record is not available here."`. A
+  `PermissionDeniedError` without a detail gets a default one; the services pass one per
+  operation (`"You may not change this sales."`). Library messages are wrapped in `gettext`.
+- `list_objects` with a `search` that finds nothing adds `searched_fields`, `id_filters` (the
+  `list_filter` relation parameters, `<path>__<target field>__exact`, as Django's
+  `RelatedFieldListFilter` names them) and a `hint`.
 - `model` is `"app_label.model_name"`. `ordering` takes column names (`"-date"`), translated to
   the admin's `o=` indexes; `filters` are the admin's own changelist parameters, as listed by
   `describe_model` (`filters[].choices[].params`).
@@ -686,6 +699,11 @@ urlpatterns += [path("mcp/", mcp_site.urls)]
   Note: run side effects from `transaction.on_commit` and not from `save()` or a signal, because
   a dry run drops `on_commit` callbacks. Mail sent from `on_commit` is not in `suppressed_emails`.
 - `ApiRequestMiddleware` sets `is_api`, `is_mcp` and `is_dry_run` to `False` on every request.
+- `AdminMcpSite.get_instructions(request)` is sent at `initialize`; the HTTP view builds one SDK
+  `Server` per request, stdio asks once at start. Default: `instructions` adjusted to the user's
+  memory (§14.11). `AdminMcpSite.get_language(request)` (default: the user's `language`
+  preference, else `None` to keep the active language, e.g. from `LocaleMiddleware`) wraps
+  `call_tool` and `get_tools` in `translation.override`.
 
 ### 14.4 JSON Schema
 
@@ -772,6 +790,145 @@ subprocess, in both the 2025-11-25 handshake era and the 2026-07-28 stateless er
 the lowest Python it supports within our range (3.10 / 3.12 / 3.13), plus a `lint` session.
 
 ---
+
+### 14.9 Resolving names (0.1.0a4)
+
+Users type names ("john", "invoices"), tools take ids. `resolve_entities` closes that gap
+across every model the user can see, in one read-only call.
+
+- **Contract.** `terms[]` of `{text, kind?, models?, for_field?}`, `limit` (default 5, cap 20), and a
+  top-level `models`: the default for every term without its own `models` or `for_field` and with
+  `kind` other than `models`.
+  Per term: `objects` and `models`, each `{status, more, candidates}`; `objects` also lists
+  `searched_models` when its status is `none` or the call passes `verbose=true`. `kind` (`any`, `objects`, `models`) picks the lists; `models` and
+  `for_field` imply `objects`. Object candidates: `model`, `id`, `label` (`str(obj)` read from
+  the scoped queryset), `confidence`, `match`, `matched_field`. Model candidates: `model`,
+  `label`, `language`, `confidence`, `match`. No other field values leave the server.
+- **Two lists.** A model name and an object name can both match one word ("server": the model
+  and the object "Server Maintenance"); each list gets its own status, so a label hit never
+  decides an object's status.
+- **Allowed set**, per request: admins exposed to MCP, `has_view_or_change_permission`, token
+  scope `view`, not in `AdminMcpSite.excluded_models` (app labels or `app_label.model_name`;
+  default `auth`, `sessions`, `contenttypes`, `admin`, `admin_api`). Objects come from the admin's
+  `get_queryset(request)` and its live `get_search_fields(request)`. An unknown, hidden or
+  excluded model in `models` is skipped the same way, and a hidden `for_field` source or target
+  answers the same 404 as an unknown one.
+- **`for_field`**: `{model, field}` with a relation field of the add form or
+  `inlines.<prefix>.<field>`; the target is the related admin's queryset with the form field's
+  `limit_choices_to`, as Django's autocomplete does. With `to_field_name`, `id` is that field.
+- **Match and confidence** (casefolded, whitespace collapsed): `exact` 1.0, `exact_code` 0.95
+  (field named `slug`, `code`, `reference`, `ref_number`), `prefix` 0.85, `word` 0.8,
+  `word_prefix` 0.75, `contains` 0.6, `search` 0.5 (the admin's search found the row, no single
+  field holds the whole term). A candidate scores its best field.
+- **Status**, computed over all scored candidates before `limit`: `none` without candidates; with
+  `exact` / `exact_code` candidates, `unique` when exactly one is; else `unique` when exactly one
+  candidate reaches 0.7; else `ambiguous`. The instructions turn it into behaviour: reads use any
+  `unique`, writes only an `exact` / `exact_code` `unique`, `ambiguous` and `none` ask.
+- **Backend seam.** `AdminMcpSite.get_entity_backend()` (class attribute `entity_backend_class`)
+  returns the object that finds candidates: `search_objects(request, term, targets)` returns
+  scored hits plus a "scan capped" flag, `search_models(request, term, targets)` returns model
+  hits. The tool keeps the contract, the allowed set, the status and the labels. The default
+  `LiveEntityBackend` runs `get_search_results` over each target queryset on any database,
+  fetches the exact (`iexact`) rows first, then scores at most `scan_limit` (200) rows per model.
+  Model names are matched under every `settings.LANGUAGES` code when the project sets it, else
+  the active language and `LANGUAGE_CODE`.
+- Rejected: one `list_objects` call per model (the agent must guess the models, gets no ranking,
+  and hidden rows of other admins stay unscoped in reports); a fuzzy match on the default manager
+  (ignores the admin's `get_queryset`); a single merged list (a model name decides an object's
+  status).
+- Tests: `tests/test_mcp_resolve.py`.
+
+### 14.10 Search index (`admin_api.contrib.search`)
+
+An opt-in app (`INSTALLED_APPS`, label `admin_api_search`) that stores searchable text for
+`resolve_entities`. A REST-only project does not get its table, signals or migrations.
+
+| Concern | Owner |
+|---|---|
+| Which rows exist: field derivation, label rows, aliases, `fold()`, signals, rebuild, `ensure` | `indexer.py`, `fold.py` |
+| Allowed set, match and confidence from `norm`, `status`, live labels | `admin_api/mcp/resolve.py` (tool), `backend.py` |
+| Storing rows, finding candidates, fuzzy ordering | the engine (`engines/`) |
+
+- **Rows.** Object rows: one per (object, field) for each MCP-exposed admin minus
+  `excluded_models`, from its `search_fields` and `api_search_fields` reduced to local
+  `CharField` / `TextField` / integer / decimal fields (prefixes and lookups stripped; relation
+  paths, dates, booleans skipped). `get_search_index_fields()` on the admin replaces that list.
+  Empty values make no row. Model rows: `verbose_name`, `verbose_name_plural`, `model_name` and
+  `search_aliases[code]` under every `LANGUAGES` code, one row per (model, folded text).
+- **Row identity.** `content_type` is the django-polymorphic leaf when the model has
+  `polymorphic_ctype`, else the model of the admin the object belongs to (the class itself, or its
+  nearest registered ancestor for a multi-table child without an admin). `object_pk` is
+  `str(pk)`.
+- **Folding** (`fold()`, Python, both sides): NFKC; Arabic alef forms to ا, ى to ي, ة to ه, ؤ to
+  و, ئ to ي, tatweel dropped, Persian kaf and yeh, Arabic-Indic and Persian digits to 0-9; NFKD and
+  combining marks dropped; casefold; whitespace collapsed; a leading "ال" stripped from each word
+  that keeps 2 letters.
+- **Freshness.** `post_save` (one receiver, any sender, checked against the indexed models) upserts
+  on commit and deletes rows of fields now empty; errors are logged, never raised into the save.
+  No `post_delete` receiver: it would disable Django's fast delete for every model, and the
+  query-time `EXISTS` hides deleted objects. `post_migrate` replaces the model rows.
+  `indexing_suspended()` (a `ContextVar`, nests) makes `post_save` skip saves in its block.
+  `rebuild_search_index` iterates each model's base manager in batches (one transaction each,
+  progress per batch), then prunes rows of that model not written by the run. `search_index
+  ensure` refreshes model rows and rebuilds models whose fingerprint (index fields, `LANGUAGES`,
+  engine, `INDEX_FORMAT`) differs from `SearchIndexState`; models no longer indexed lose their
+  rows.
+- **Engines.** `ADMIN_API_SEARCH = {"DEFAULT_ENGINE": ..., "ENGINES": {name: {"BACKEND", "OPTIONS"}}}`
+  merged over the `db` default. Interface `engines.base.SearchEngine`: `upsert(entries)`,
+  `delete_rows(content_type, object_pk, fields)`, `replace_model_rows(rows)`,
+  `prune(content_types, older_than)`, `search(query) -> list[Hit]`, flag `scope_pushdown`. `Hit`
+  carries `content_type`, `object_pk`, `field`, `norm`, `engine_score` (0 to 1). One engine holds the rows; with an external engine the table stays empty.
+- **Query.** The backend turns the tool's targets into scopes (content types incl. owned
+  subclasses, the live search fields, code fields, the target queryset with `limit_choices_to`)
+  and asks for `limit + 1` candidates (at least 2: enough to tell `unique` from `ambiguous`).
+  Engines with `scope_pushdown` scope inside the query. The others get the post-filter path: pages
+  of `5 x (limit + 1)` hits, kept when `get_queryset(request).filter(pk__in=...)` holds them, at
+  most 3 pages. The core rescores each hit from `norm` with the tool's `match_text`; anything else
+  is `fuzzy` at `0.6 x engine_score`. Labels stay `str(obj)` from the scoped queryset;
+  stored `text` never leaves the server. Model labels are read live under the row's language.
+- **`db` engine.** Table `admin_api_search_entry` (`kind`, `content_type`, `object_pk`, `field`,
+  `language`, `text`, `norm`, `updated_at` moved only when `norm` changes, `indexed_at` moved on
+  every write for prune), unique (`content_type`, `object_pk`, `field`, `language`), which also
+  serves lookups by (`content_type`, `object_pk`). On Postgres the migration runs `CREATE EXTENSION IF NOT EXISTS
+  pg_trgm` and a GIN `gin_trgm_ops` index on `norm` (skipped with a warning when the role may not
+  create the extension). Upserts are `INSERT ... ON CONFLICT DO UPDATE` on Postgres and SQLite.
+  Pass 1: `norm = q` or `LIKE '%q%'` (terms under 3 characters: exact and prefix), ranked in SQL by
+  the match tiers, then `updated_at`, content type and pk. Pass 2 (Postgres with `pg_trgm`, only
+  when pass 1 found fewer candidates than asked): `q <% norm` under
+  `set_config('pg_trgm.word_similarity_threshold', 0.4, true)`, ordered by `word_similarity`.
+  Scoping: per target `content_type IN (...) AND field IN (...) AND EXISTS (target queryset WHERE
+  pk = CASE WHEN content_type IN (...) THEN object_pk::bigint END)`; the guard keeps the cast off
+  rows of other models, the cast on the outer side keeps the inner pk index usable.
+- **Database ctype.** pg_trgm splits words by the database `LC_CTYPE`; under `C` or `POSIX` Arabic
+  words yield no trigrams. Check `admin_api_search.W001` (database tag) warns, `search_index
+  ensure` exits non-zero.
+- Not indexed: relation paths (`client__name`), rows changed by `QuerySet.update()`, bulk writes,
+  `loaddata` and raw SQL until the next rebuild.
+- Tests: `tests/test_search_fold.py`, `test_search_index.py`, `test_search_resolve.py`,
+  `test_search_engines.py` (settings, an in-memory engine without `scope_pushdown`),
+  `test_search_postgres.py` (nox `tests_postgres`, CI job `postgres` on Postgres 17).
+
+### 14.11 Per-user memory (0.1.0a4)
+
+- **Store.** `admin_api.McpUserMemory`: `user` (FK, CASCADE), `kind` (`preference`),
+  `key`, `value` (JSON), `updated`; unique on `(user, kind, key)`. `admin_api` is
+  in the default `excluded_models` and `McpUserMemoryAdmin` has `api_enabled = False`, so no
+  generic tool lists or reads it.
+- **Preferences** (`admin_api.memory`): `audience` (`business` default, `developer`), `language`
+  (a `settings.LANGUAGES` code, through `get_supported_language_variant`), `notes` (500
+  characters). A stored value that no longer validates falls back to the default.
+- **Loading.** `AdminMcpSite.get_user_memory(request)` runs one query and caches a `UserMemory`
+  on `request.mcp_memory`; `prepare_request`, `get_instructions` and `get_language` all go
+  through it. Anonymous users get the defaults without a query.
+- **Instructions.** `developer` replaces `BUSINESS_WORDING` with `DEVELOPER_WORDING` when the
+  site's instructions contain it; `language` appends "Answer the user in <language name>.";
+  `notes` are appended as the user's own notes. No rows: exactly `instructions`.
+- **`set_preference(key, value)`** writes only `request.user`'s preference rows; an empty value
+  deletes the row. It is not a write tool (listed on read-only sites). The audit log records
+  the tool name only, never the value.
+- **Admin.** `McpUserMemoryAdmin` is registered next to the token admin; users see and edit
+  their own rows, superusers everyone's; preference values are validated in the form.
+- Tests: `tests/test_mcp_memory.py`.
 
 ## 15. Nested admins (milestone 17, as built)
 

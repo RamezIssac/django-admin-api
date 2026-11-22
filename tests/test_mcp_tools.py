@@ -54,12 +54,14 @@ def test_tools_catalogue(mcp):
         "list_models",
         "describe_model",
         "list_objects",
+        "resolve_entities",
         "get_object",
         "create_object",
         "update_object",
         "delete_object",
         "run_action",
         "run_view",
+        "set_preference",
         "client_statement",  # @admin_api.view(mcp_tool=...)
         "post_sale",
     ]
@@ -68,8 +70,10 @@ def test_tools_catalogue(mcp):
         "list_models",
         "describe_model",
         "list_objects",
+        "resolve_entities",
         "get_object",
         "run_view",
+        "set_preference",  # the user's own preferences, not business data
         "client_statement",  # post_sale writes: hidden
     ]
 
@@ -110,7 +114,7 @@ def test_list_models_read_only_perms(call, data):
 def test_describe_model(call, data):
     out, err = call("describe_model", {"model": "testapp.sales"})
     assert not err
-    assert out["model"] == "testapp.sales" and out["pk_field"] == "id"
+    assert out["model"] == "testapp.sales" and out["id_field"] == "id"
     assert {c["name"] for c in out["columns"]} >= {"slug", "status", "doubled"}
     status_filter = next(f for f in out["filters"] if f["title"] == "status")
     assert {"display": "Posted", "params": {"status__exact": "posted"}} in status_filter["choices"]
@@ -134,12 +138,46 @@ def test_list_objects_columnar_filters_ordering(call, data):
     )
     assert not err, out
     assert out["count"] == 3 and out["pages"] == 2 and out["per_page"] == 2
-    assert out["columns"][:2] == ["pk", "slug"]
+    assert out["columns"][:2] == ["id", "slug"]
     assert [row[1] for row in out["rows"]] == ["S-5", "S-3"]
     assert "next" not in out
 
     out, _ = call("list_objects", {"model": "testapp.sales", "ordering": "-slug", "per_page": 2, "page": 2})
     assert [row[1] for row in out["rows"]] == ["S-3", "S-2"]
+
+
+ROW_CAP_HINT = (
+    "list_objects pages through the first 3 records of a query. For totals, counts or groupings run a report "
+    "(a view under 'views' in list_models); to find records, add filters or search."
+)
+
+
+def test_list_objects_caps_paging_of_a_large_query(call, data, mcp):
+    """Past list_max_rows a query reports only the reachable pages, adds a hint, and refuses deeper pages."""
+    assert AdminMcpSite.list_max_rows == 1000
+    mcp.list_max_rows = 3
+    out, err = call("list_objects", {"model": "testapp.sales", "ordering": "slug", "per_page": 2})
+    assert not err, out
+    assert (out["count"], out["pages"], out["hint"]) == (5, 2, ROW_CAP_HINT)
+    out, err = call("list_objects", {"model": "testapp.sales", "ordering": "slug", "per_page": 2, "page": 2})
+    assert not err and [row[1] for row in out["rows"]] == ["S-3", "S-4"]
+    out, err = call("list_objects", {"model": "testapp.sales", "per_page": 2, "page": 3})
+    assert err and out["error"] == "invalid_arguments" and out["detail"] == ROW_CAP_HINT
+
+    mcp.list_max_rows = 4
+    out, err = call("list_objects", {"model": "testapp.sales", "per_page": 2, "page": 3})
+    assert err and out["error"] == "invalid_arguments"
+    out, err = call("list_objects", {"model": "testapp.sales", "per_page": 4})
+    assert not err and (out["pages"], len(out["rows"])) == (1, 4)
+
+
+def test_list_objects_under_the_row_cap_or_without_one_pages_everything(call, data, mcp):
+    mcp.list_max_rows = 5
+    out, err = call("list_objects", {"model": "testapp.sales", "per_page": 2, "page": 3})
+    assert not err and (out["count"], out["pages"], len(out["rows"])) == (5, 3, 1) and "hint" not in out
+    mcp.list_max_rows = None
+    out, err = call("list_objects", {"model": "testapp.sales", "per_page": 1, "page": 5})
+    assert not err and out["pages"] == 5 and "hint" not in out
 
 
 def test_list_objects_search_and_bad_args(call, data):
@@ -209,7 +247,7 @@ def test_create_and_update(call, data):
     out, err = call("create_object", {"model": "testapp.sales", "data": payload})
     assert not err, out
     assert out["object"]["slug"] == "S-9" and out["messages"] == [{"level": "info", "text": "Saved S-9"}]
-    pk = out["object"]["pk"]
+    pk = out["object"]["id"]
     assert LogEntry.objects.filter(object_id=str(pk)).count() == 1
 
     out, err = call("update_object", {"model": "testapp.sales", "pk": pk, "data": {"status": "posted"}})
@@ -262,7 +300,7 @@ def test_delete_needs_confirm(call, data):
     assert out["preview"]["can_delete"] is True
     assert Sales.objects.filter(pk=sale.pk).exists()
     out, err = call("delete_object", {"model": "testapp.sales", "pk": sale.pk, "confirm": True})
-    assert not err and out == {"deleted": True, "object": {"pk": sale.pk, "str": "S-2"}}
+    assert not err and out == {"deleted": True, "object": {"id": sale.pk, "label": "S-2"}}
     assert not Sales.objects.filter(pk=sale.pk).exists()
 
 

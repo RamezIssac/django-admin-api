@@ -52,12 +52,12 @@ def test_initialize(client, token):
     assert out["protocolVersion"] == VERSION
     assert out["serverInfo"]["name"] == "testapp"
     assert out["capabilities"]["tools"] is not None
-    assert out["instructions"].startswith("This server exposes a Django admin.")
+    assert out["instructions"].startswith("This server gives you the user's business records and documents.")
 
 
 def test_tools_list(client, token):
     tools = {t["name"]: t for t in rpc(client, token, "tools/list", {})["result"]["tools"]}
-    assert len(tools) == 11  # 9 generic + 2 views published with mcp_tool=
+    assert len(tools) == 13  # 11 generic + 2 views published with mcp_tool=
     assert tools["list_models"]["annotations"]["readOnlyHint"] is True
     assert tools["delete_object"]["annotations"]["destructiveHint"] is True
     assert tools["create_object"]["inputSchema"]["required"] == ["model", "data"]

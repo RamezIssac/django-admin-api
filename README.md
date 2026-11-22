@@ -132,10 +132,15 @@ Set `ADMIN_API_MCP_ENABLED = False` in settings to turn the MCP endpoints off (t
 Step by step, with scopes, `.mcp.json` and troubleshooting: [Connect Claude Code](docs/connect-claude-code.md).
 
 Tools: `list_models`, `describe_model` (columns, filters, actions, custom views, JSON Schema),
-`list_objects` (admin filters, search, ordering, paging), `get_object`, `create_object` /
+`list_objects` (admin filters, search, ordering, paging), `resolve_entities` (names to ids and
+models), `get_object`, `create_object` /
 `update_object` (with `dry_run`: the full save pipeline, then rolled back), `delete_object`
 (preview unless `confirm=true`), `run_action`, `run_view` (custom views), plus one tool per view
 published with `mcp_tool=`.
+
+`list_objects` pages through the first `AdminMcpSite.list_max_rows` records of a query (default
+1000, `None` for no cap). A larger query adds a `hint` pointing at reports, filters and search, and
+a page past the cap answers `invalid_arguments` with the same hint.
 
 On the admin: `mcp_description = "…"` (context for the LLM; a string or a callable of the request),
 `mcp_enabled = False` (hide from MCP only). To reuse another attribute, override
@@ -150,6 +155,122 @@ still happen. Note: send side effects from `transaction.on_commit` and not from 
 signal, because a dry run discards `on_commit` callbacks and rolls back nothing outside the
 database. Mail sent from `on_commit` does not appear in `suppressed_emails`.
 
+### Business wording
+
+The default server instructions ask the agent to talk in business language: kinds of records by
+their verbose `name`, records by their `label`, "ID" only when needed. The tools answer the same
+way: records carry `id` and `label` (REST keeps `pk` and `str`), related records are
+`{"id", "label"}`, and messages use verbose names (`"No sales with ID 9."`, `"You may not change
+this sales."`, `"This kind of record is not available here."`). The arguments `pk` and `pks` are
+still accepted as aliases of `id` and `ids` for one release. A `list_objects` search that finds
+nothing returns `searched_fields`, `id_filters` (e.g. `client__id__exact`) and a `hint` to filter
+by a resolved ID.
+
+### Per-user memory: audience and language
+
+Each user can keep preferences in `McpUserMemory` (app `admin_api`, migration `0003`): ask the
+agent ("answer me in Arabic") and it calls the `set_preference` tool, or edit the rows in the
+Django admin (users see their own rows, superusers everyone's).
+
+| Key | Values | Effect |
+|---|---|---|
+| `audience` | `business` (default), `developer` | `developer` swaps the business-wording paragraph of the instructions for one allowing model paths, field names and IDs |
+| `language` | a `settings.LANGUAGES` code | tool calls run under `translation.override(language)`: verbose names, Django's validation messages, library messages; the instructions gain "Answer the user in Arabic." |
+| `notes` | up to 500 characters | appended to the instructions as the user's own notes |
+
+The memory is loaded once per request (`request.mcp_memory`) and read by two hooks on
+`AdminMcpSite`, which a subclass can override:
+
+```python
+class ErpMcpSite(AdminMcpSite):
+    def get_instructions(self, request):   # sent at initialize
+        return super().get_instructions(request) + "\nThe fiscal year starts in July."
+
+    def get_language(self, request):       # tool calls and tool lists run in it
+        return super().get_language(request) or "ar"
+```
+
+A new language applies from the next tool call; audience and notes from the next connection.
+
+### Resolving names
+
+`resolve_entities` turns the words a user typed into ids before the agent filters, reports or
+writes. Each term returns two lists, `objects` and `models` ("clients" names a model), each with a
+`status` of `unique`, `ambiguous` or `none` and ranked candidates (`model`, `id`, `label`,
+`confidence`, `match`, `matched_field`).
+
+```json
+{"terms": [{"text": "ahmed", "for_field": {"model": "store.payment", "field": "client"}},
+           {"text": "S-1", "models": ["store.sales"]},
+           {"text": "invoices", "kind": "models"}],
+ "models": ["store.client"],
+ "limit": 5}
+```
+
+A top-level `models` applies to every term without its own `models` or `for_field`.
+
+- Objects come from each admin's own `get_search_results` over its `get_queryset(request)`, with
+  its live `get_search_fields(request)`; models must be MCP-exposed, viewable by the user and
+  allowed by the token scopes. `for_field` (a relation field, or `inlines.<prefix>.<field>`)
+  searches the related admin with the field's `limit_choices_to`.
+- Match and confidence: `exact` 1.0, `exact_code` 0.95 (`slug`, `code`, `reference`,
+  `ref_number`), `prefix` 0.85, `word` 0.8, `word_prefix` 0.75, `contains` 0.6, `search` 0.5 (found
+  by the admin's search, no single field holds the whole term).
+- `status`: `none` without candidates; with `exact` or `exact_code` candidates, `unique` when there
+  is exactly one of them; otherwise `unique` when exactly one candidate reaches 0.7.
+- `AdminMcpSite(api_site, excluded_models=[...])` takes app labels or `app_label.model_name`; the
+  default is `auth`, `sessions`, `contenttypes`, `admin` and `admin_api`. The list replaces the
+  default.
+- The search runs through `AdminMcpSite.get_entity_backend()`. Without the search index below,
+  `LiveEntityBackend` runs each admin's own search; it needs no index and works on any database.
+
+### Search index (`admin_api.contrib.search`)
+
+An opt-in app that keeps one row per (object, search field) and per (model, label, language) in a
+search engine. `resolve_entities` then finds names across all models in one query, and catches typos
+on Postgres. Installing the app switches `resolve_entities` to the index.
+
+```python
+INSTALLED_APPS = [..., "admin_api", "admin_api.contrib.search"]
+```
+
+```bash
+python manage.py migrate                  # the table, and on Postgres pg_trgm with a GIN index
+python manage.py search_index ensure      # every deploy, after migrate
+```
+
+- Rows come from each MCP-exposed admin (minus `excluded_models`): its `search_fields` and
+  `api_search_fields` that are local text or number fields (relation paths, dates and booleans are
+  skipped), plus `verbose_name`, `verbose_name_plural` and `model_name` under every `LANGUAGES` code.
+  Text is folded on both sides: accents, case, Arabic letter variants and digits, the Arabic article.
+- Admin hooks: `get_search_index_fields()` replaces the derived field list, `search_index_code_fields`
+  adds fields whose exact match is `exact_code`, `search_aliases = {"en": ["bills"]}` adds model names.
+- Saves update rows on commit. `QuerySet.update()`, bulk writes, `loaddata` and deletes are not seen;
+  deleted rows never surface because every hit is checked against the admin's `get_queryset(request)`.
+  `search_index ensure` refreshes the label rows and rebuilds the models whose index fields, languages
+  or engine changed; it exits non-zero on a Postgres database with a `C` or `POSIX` ctype.
+  `rebuild_search_index [--model app.Model] [--models-only] [--batch-size 1000]` rebuilds in batches.
+  For a bulk load, save inside `with indexing_suspended():` (`admin_api.contrib.search.indexer`) and
+  run `rebuild_search_index` afterwards; only saves in that thread or task skip the index.
+- The built-in `db` engine works on every database; on Postgres a trigram pass adds `fuzzy` matches
+  (confidence `0.6 x word_similarity`, threshold 0.4). Other engines plug in by settings:
+
+```python
+ADMIN_API_SEARCH = {
+    "DEFAULT_ENGINE": "db",
+    "ENGINES": {
+        "db": {"BACKEND": "admin_api.contrib.search.engines.db.DatabaseEngine",
+               "OPTIONS": {"TRIGRAM_THRESHOLD": 0.4}},
+        # "meilisearch": {"BACKEND": "...", "OPTIONS": {...}},
+    },
+}
+```
+
+An engine subclasses `admin_api.contrib.search.engines.base.SearchEngine`: `upsert`, `delete_rows`,
+`replace_model_rows`, `prune`, `search` (hits carry an `engine_score` from 0 to 1), and the flag
+`scope_pushdown`. Engines without `scope_pushdown` get their hits filtered through the admin's
+`get_queryset(request)`.
+
 ### Safer writes
 
 - **Totals.** `api_totals = ["value", "quantity"]` on the admin (field names, admin methods or
@@ -158,9 +279,9 @@ database. Mail sent from `on_commit` does not appear in `suppressed_emails`.
 - **Require a dry run.** `AdminMcpSite(api_site, require_dry_run=True)` makes `create_object`,
   `update_object` and write views refuse a real write unless it passes the `confirm_token` that a
   valid dry run of the same arguments returned. The token works once, within 15 minutes, for the
-  same user, API token, model, pk and data, and only while the object's stored row is unchanged.
+  same user, API token, model, ID and data, and only while the object's stored row is unchanged.
   When a write depends on state stored elsewhere (a status log, related rows), the admin returns
-  it from `get_mcp_confirm_state(self, request, obj)` (plain values such as the last log row's pk;
+  it from `get_mcp_confirm_state(self, request, obj)` (plain values such as the last log row's ID;
   `obj` is `None` for a create) and the token is bound to it too.
   Permissions are checked first: a user who may not write gets 403, not 409.
   An admin overrides the site with `mcp_require_dry_run = True | False`. `delete_object` keeps its
@@ -223,7 +344,7 @@ The response is `{"view", "pk" (detail), "result", "messages"}`. Errors use the 
 
 **How an agent finds them.** The MCP server instructions mention custom views; `list_models`
 lists each model's views (name, description, `detail`, `writes`); `describe_model` gives each
-view's `params_schema`; `get_object` names the views of that object; `run_view(model, view, pk?,
+view's `params_schema`; `get_object` names the views of that object; `run_view(model, view, id?,
 params, dry_run)` runs any of them. Views the agent uses often can also be published as their own
 tool with `mcp_tool=` (typed arguments, listed in `tools/list` only for users who may run them).
 REST clients get the same from `/schema/` (`views`, with `url` and `methods`) and object

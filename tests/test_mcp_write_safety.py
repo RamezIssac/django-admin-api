@@ -517,7 +517,7 @@ def test_mail_from_another_thread_is_sent_during_a_dry_run(call, ahmed):
 def test_mcp_log_entries_say_via_mcp(call, ahmed):
     site = AdminMcpSite(api_site)
     out, _ = call(site, "create_object", create_args(ahmed))
-    pk = out["object"]["pk"]
+    pk = out["object"]["id"]
     added = LogEntry.objects.get(object_id=str(pk))
     assert added.get_change_message().endswith("Via MCP.")
     assert added.get_change_message().startswith("Added")

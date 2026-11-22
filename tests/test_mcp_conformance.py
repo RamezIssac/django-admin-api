@@ -45,11 +45,11 @@ async def scenario(client, customer_pk) -> dict:
     seen["invalid"] = (bad.is_error, bad.structured_content["non_field_errors"])
 
     created = (await client.call_tool("create_object", {"model": "testapp.sales", "data": data})).structured_content
-    pk = created["object"]["pk"]
-    item_pk = created["object"]["inlines"]["items"][0]["pk"]
+    pk = created["object"]["id"]
+    item_pk = created["object"]["inlines"]["items"][0]["id"]
     updated = await client.call_tool(
         "update_object",
-        {"model": "testapp.sales", "pk": pk, "data": {"inlines": {"items": [{"pk": item_pk, "quantity": 4}]}}},
+        {"model": "testapp.sales", "id": pk, "data": {"inlines": {"items": [{"id": item_pk, "quantity": 4}]}}},
     )
     seen["value_after_update"] = updated.structured_content["object"]["value"]
 
@@ -59,16 +59,16 @@ async def scenario(client, customer_pk) -> dict:
     seen["listed"] = [row[1] for row in listed.structured_content["rows"]]
 
     # custom views: one published as its own tool, one through run_view (dry run)
-    statement = await client.call_tool("client_statement", {"pk": customer_pk, "status": "draft"})
+    statement = await client.call_tool("client_statement", {"id": customer_pk, "status": "draft"})
     seen["statement_total"] = statement.structured_content["result"]["total"]
-    post = await client.call_tool("run_view", {"model": "testapp.sales", "view": "post", "pk": pk, "dry_run": True})
+    post = await client.call_tool("run_view", {"model": "testapp.sales", "view": "post", "id": pk, "dry_run": True})
     seen["view_dry_run"] = (post.structured_content["dry_run"], post.structured_content["result"]["status"])
-    action = await client.call_tool("run_action", {"model": "testapp.sales", "action": "mark_posted", "pks": [pk]})
+    action = await client.call_tool("run_action", {"model": "testapp.sales", "action": "mark_posted", "ids": [pk]})
     seen["action"] = action.structured_content["messages"]
 
-    preview = await client.call_tool("delete_object", {"model": "testapp.sales", "pk": pk})
+    preview = await client.call_tool("delete_object", {"model": "testapp.sales", "id": pk})
     seen["preview_deleted"] = preview.structured_content["deleted"]
-    deleted = await client.call_tool("delete_object", {"model": "testapp.sales", "pk": pk, "confirm": True})
+    deleted = await client.call_tool("delete_object", {"model": "testapp.sales", "id": pk, "confirm": True})
     seen["deleted"] = deleted.structured_content["deleted"]
     return seen
 
@@ -83,8 +83,10 @@ EXPECTED = {
         "list_models",
         "list_objects",
         "post_sale",
+        "resolve_entities",
         "run_action",
         "run_view",
+        "set_preference",
         "update_object",
     ],
     "models": ["testapp.client", "testapp.sales"],

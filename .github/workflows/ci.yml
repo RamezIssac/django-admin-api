@@ -57,3 +57,27 @@ jobs:
             noxfile.py
       # uv downloads the Python each session asks for (3.10 / 3.12 / 3.13).
       - run: uvx nox -s "${{ matrix.session }}"
+
+  # admin_api.contrib.search on Postgres: pg_trgm, the GIN index and the trigram pass.
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      POSTGRES_HOST: localhost
+      POSTGRES_PASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            noxfile.py
+      - run: uvx nox -s tests_postgres
