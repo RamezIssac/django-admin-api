@@ -1,15 +1,18 @@
 """MCP write output (header totals), the require_dry_run confirm token and the "via MCP" LogEntry note."""
 
 import json
+import threading
 from decimal import Decimal
 
 import pytest
 from django.contrib.admin.models import LogEntry
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
+from django.core import mail
+from django.core.mail.backends import locmem
 from django.db.models.signals import post_delete, post_save
 
-from admin_api.mcp import AdminMcpSite
+from admin_api.mcp import AdminMcpSite, confirm, dryrun
 from admin_api.models import ApiToken
 from tests.testapp import totals_admin
 from tests.testapp.models import Client, Sales, SalesItem
@@ -184,6 +187,70 @@ def test_view_token_is_bound_to_the_object_state(call, gated, ahmed):
     assert sale.status == "draft"
 
 
+@pytest.fixture
+def item_log(monkeypatch):
+    """The admin pins a sale's items, state stored outside the sale's own row."""
+    seen = []
+
+    def get_mcp_confirm_state(self, request, obj):
+        seen.append(obj)
+        return sorted(obj.items.values_list("pk", flat=True)) if obj else None
+
+    sales_admin = api_site.get_model_admin("testapp", "sales")
+    monkeypatch.setattr(type(sales_admin), "get_mcp_confirm_state", get_mcp_confirm_state, raising=False)
+    return seen
+
+
+def test_confirm_state_hook_catches_a_change_outside_the_row(call, gated, ahmed, item_log):
+    sale = Sales.objects.create(slug="S-1", client=ahmed)
+    args = {"pk": sale.pk, "note": "x"}
+    dry, _ = call(gated, "post_sale", {**args, "dry_run": True})
+    SalesItem.objects.create(sales=sale, product="Milk")  # a concurrent write to another table
+    out, err = call(gated, "post_sale", {**args, "confirm_token": dry["confirm_token"]})
+    assert err and out["error"] == "invalid_confirm_token" and out["status"] == 409
+    sale.refresh_from_db()
+    assert sale.status == "draft"
+
+
+def test_confirm_state_hook_accepts_an_unchanged_write(call, gated, ahmed, item_log):
+    sale = Sales.objects.create(slug="S-1", client=ahmed)
+    SalesItem.objects.create(sales=sale, product="Milk")
+    args = {"pk": sale.pk, "note": "x"}
+    dry, _ = call(gated, "post_sale", {**args, "dry_run": True})
+    out, err = call(gated, "post_sale", {**args, "confirm_token": dry["confirm_token"]})
+    assert not err, out
+    dry, _ = call(gated, "create_object", create_args(ahmed, dry_run=True))
+    assert not call(gated, "create_object", create_args(ahmed, confirm_token=dry["confirm_token"]))[1]
+    assert item_log[-2:] == [None, None]  # a create passes no object
+
+
+def test_write_state_pins_the_row_and_the_hook_value(rf, superuser, ahmed, item_log):
+    sale = Sales.objects.create(slug="S-1", client=ahmed)
+    item = SalesItem.objects.create(sales=sale, product="Milk")
+    request = rf.post("/mcp/")
+    request.user = superuser
+    state = confirm.write_state(api_site.get_model_admin("testapp", "sales"), request, sale)
+    assert state == {"row": Sales.objects.filter(pk=sale.pk).values().first(), "extra": [item.pk]}
+
+
+def test_confirm_state_hook_gets_the_request(call, gated, ahmed, superuser, monkeypatch):
+    users = []
+
+    def get_mcp_confirm_state(self, request, obj):
+        users.append(request.user.username)
+
+    sales_admin = api_site.get_model_admin("testapp", "sales")
+    monkeypatch.setattr(type(sales_admin), "get_mcp_confirm_state", get_mcp_confirm_state, raising=False)
+    sale = Sales.objects.create(slug="S-1", client=ahmed)
+    view = {"pk": sale.pk, "note": "x"}
+    dry, _ = call(gated, "post_sale", {**view, "dry_run": True})
+    assert not call(gated, "post_sale", {**view, "confirm_token": dry["confirm_token"]})[1]
+    update = {"model": "testapp.sales", "pk": sale.pk, "data": {"value": "3"}}
+    dry, _ = call(gated, "update_object", {**update, "dry_run": True})
+    assert not call(gated, "update_object", {**update, "confirm_token": dry["confirm_token"]})[1]
+    assert users == [superuser.username] * 4
+
+
 def test_token_is_bound_to_the_api_token(call, gated, ahmed, superuser):
     token_a = ApiToken.objects.create_token(superuser, "a", kind="mcp")[0]
     token_b = ApiToken.objects.create_token(superuser, "b", kind="mcp")[0]
@@ -344,6 +411,104 @@ def test_token_flow_over_stateless_http(client, superuser, ahmed, monkeypatch):
     assert not err and dry["confirm_token"]
     out, err = call_tool(client, token, "create_object", create_args(ahmed, confirm_token=dry["confirm_token"]))
     assert not err and Sales.objects.filter(slug="S-9").exists()
+
+
+# --------------------------------------------------------------------------------------------
+# mail sent during a dry run
+# --------------------------------------------------------------------------------------------
+@pytest.fixture
+def mail_on_post():
+    """Mails the client from Sales.save() once a sale is posted: a side effect outside on_commit."""
+
+    def notify(sender, instance, **kwargs):
+        if instance.status == "posted":
+            mail.send_mail(f"{instance.slug} posted", "", "erp@example.com", ["client@example.com"])
+
+    post_save.connect(notify, sender=Sales, dispatch_uid="mail_on_post")
+    yield
+    post_save.disconnect(sender=Sales, dispatch_uid="mail_on_post")
+
+
+@pytest.mark.usefixtures("mail_on_post")
+def test_view_dry_run_suppresses_mail(call, ahmed):
+    site = AdminMcpSite(api_site)
+    sale = Sales.objects.create(slug="S-1", client=ahmed)
+    run_view = {"model": "testapp.sales", "view": "post", "pk": sale.pk, "params": {}, "dry_run": True}
+    out, err = call(site, "run_view", run_view)
+    assert not err, out
+    assert out["suppressed_emails"] == [{"recipients": ["client@example.com"], "subject": "S-1 posted"}]
+    assert out["note"] == "Nothing was saved: the view ran and was rolled back."
+    assert len(mail.outbox) == 0
+    sale.refresh_from_db()
+    assert sale.status == "draft"
+
+    out, err = call(site, "run_view", {**run_view, "dry_run": False})
+    assert not err and "suppressed_emails" not in out
+    assert [m.subject for m in mail.outbox] == ["S-1 posted"]
+
+
+@pytest.mark.usefixtures("mail_on_post")
+def test_update_dry_run_suppresses_mail(call, ahmed):
+    site = AdminMcpSite(api_site)
+    sale = Sales.objects.create(slug="S-1", client=ahmed)
+    args = {"model": "testapp.sales", "pk": sale.pk, "data": {"status": "posted"}}
+    out, err = call(site, "update_object", {**args, "dry_run": True})
+    assert not err and out["valid"], out
+    assert out["suppressed_emails"][0]["subject"] == "S-1 posted"
+    assert len(mail.outbox) == 0
+    out, _ = call(site, "update_object", {**args, "dry_run": True, "data": {"value": "3"}})
+    assert "suppressed_emails" not in out
+
+
+@pytest.mark.skipif(not hasattr(mail, "mailers"), reason="MAILERS arrived in Django 6.1")
+def test_dry_run_suppresses_mail_sent_through_mailers(call, ahmed, settings):
+    settings.MAILERS = {"default": {"BACKEND": "django.core.mail.backends.locmem.EmailBackend"}}
+
+    def notify(sender, instance, **kwargs):
+        mail.mailers.default.send_messages([mail.EmailMessage("via mailers", "", to=["c@example.com"])])
+
+    post_save.connect(notify, sender=Sales, dispatch_uid="mailers")
+    try:
+        sale = Sales.objects.create(slug="S-1", client=ahmed)
+        mail.outbox.clear()
+        args = {"model": "testapp.sales", "pk": sale.pk, "data": {"value": "3"}, "dry_run": True}
+        out, err = call(AdminMcpSite(api_site), "update_object", args)
+    finally:
+        post_save.disconnect(sender=Sales, dispatch_uid="mailers")
+    assert not err and out["suppressed_emails"] == [{"recipients": ["c@example.com"], "subject": "via mailers"}]
+    assert len(mail.outbox) == 0
+
+
+def test_captured_backends_keep_their_arguments_and_report_what_they_sent(db):
+    with dryrun.capture_mail() as captured:
+        by_keyword = mail.get_connection(fail_silently=True)
+        by_position = locmem.EmailBackend(True)
+        with by_keyword as connection:
+            sent = connection.send_messages([mail.EmailMessage("hi", "", to=["a@example.com"])])
+        assert mail.send_mail("s", "", "erp@example.com", ["b@example.com"]) == 1
+    assert by_keyword.fail_silently is True and by_position.fail_silently is True
+    assert sent == 1 and [m.subject for m in captured] == ["hi", "s"]
+    assert len(mail.outbox) == 0
+
+
+def test_mail_from_another_thread_is_sent_during_a_dry_run(call, ahmed):
+    """The capture belongs to the dry run's context: a concurrent request still sends."""
+
+    def other_request(sender, instance, **kwargs):
+        thread = threading.Thread(target=mail.send_mail, args=("other", "", "erp@example.com", ["x@example.com"]))
+        thread.start()
+        thread.join()
+
+    post_save.connect(other_request, sender=Sales, dispatch_uid="other_request")
+    try:
+        sale = Sales.objects.create(slug="S-1", client=ahmed)
+        mail.outbox.clear()
+        args = {"model": "testapp.sales", "pk": sale.pk, "data": {"value": "3"}, "dry_run": True}
+        out, err = call(AdminMcpSite(api_site), "update_object", args)
+    finally:
+        post_save.disconnect(sender=Sales, dispatch_uid="other_request")
+    assert not err and "suppressed_emails" not in out
+    assert [m.subject for m in mail.outbox] == ["other"]
 
 
 # --------------------------------------------------------------------------------------------

@@ -145,9 +145,15 @@ a page past the cap answers `invalid_arguments` with the same hint.
 On the admin: `mcp_description = "…"` (context for the LLM; a string or a callable of the request),
 `mcp_enabled = False` (hide from MCP only). To reuse another attribute, override
 `get_mcp_description(self, request)` (`ApiAdminMixin`):
-`def get_mcp_description(self, request): return self.description`. In hooks: `request.is_mcp`, and
-`request.is_dry_run` to skip side effects such as
-e-mails during a dry run (or use `transaction.on_commit`, which a dry run discards).
+`def get_mcp_description(self, request): return self.description`. In hooks: `request.is_mcp` and
+`request.is_dry_run`.
+
+**Side effects and dry runs.** A dry run runs the whole save (or view) and rolls the database
+back. E-mail sent during it is captured, not delivered, and listed in the result as
+`suppressed_emails` (`recipients` and `subject`). Other side effects (HTTP calls, files, queues)
+still happen. Note: send side effects from `transaction.on_commit` and not from `save()` or a
+signal, because a dry run discards `on_commit` callbacks and rolls back nothing outside the
+database. Mail sent from `on_commit` does not appear in `suppressed_emails`.
 
 ### Business wording
 
@@ -274,6 +280,9 @@ An engine subclasses `admin_api.contrib.search.engines.base.SearchEngine`: `upse
   `update_object` and write views refuse a real write unless it passes the `confirm_token` that a
   valid dry run of the same arguments returned. The token works once, within 15 minutes, for the
   same user, API token, model, ID and data, and only while the object's stored row is unchanged.
+  When a write depends on state stored elsewhere (a status log, related rows), the admin returns
+  it from `get_mcp_confirm_state(self, request, obj)` (plain values such as the last log row's ID;
+  `obj` is `None` for a create) and the token is bound to it too.
   Permissions are checked first: a user who may not write gets 403, not 409.
   An admin overrides the site with `mcp_require_dry_run = True | False`. `delete_object` keeps its
   `confirm`; `run_action` has no dry run and is not gated.
