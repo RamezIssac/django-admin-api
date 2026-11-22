@@ -440,9 +440,10 @@ def run_view(model_admin, request, name: str, *, object_id=None, data=None, obj=
     return _run(model_admin, request, name, object_id=object_id, data=data, obj=obj)
 
 
-def run_action(model_admin, request, name: str, payload: dict) -> dict:
+def run_action(model_admin, request, name: str, payload: dict, *, delete_preview=False) -> dict:
     """Run an admin action on ``{"pks": [...]}`` or ``{"all": true}``; with ``all``, the
-    changelist filters in ``request.GET`` narrow the queryset."""
+    changelist filters in ``request.GET`` narrow the queryset. ``delete_preview``:
+    ``delete_selected`` without an ``api_`` twin lists what deleting the selection would remove and deletes nothing."""
     from .actions import run_action as _run
 
-    return _run(model_admin, request, name, payload)
+    return _run(model_admin, request, name, payload, delete_preview=delete_preview)
