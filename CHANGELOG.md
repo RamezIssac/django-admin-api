@@ -32,6 +32,8 @@
 - Commands `rebuild_search_index [--model] [--models-only] [--batch-size]` and `search_index ensure`
   (fingerprint-gated rebuild; exits non-zero on a `C` / `POSIX` database ctype). System check
   `admin_api_search.W001` warns about that ctype.
+- `admin_api.contrib.search.indexer.indexing_suspended()`: a context manager for bulk loads; saves
+  inside it (this thread or task) skip the index until `rebuild_search_index` runs.
 - Admin hooks `get_search_index_fields()`, `search_index_code_fields`, `search_aliases`.
 - Installing the app sets `AdminMcpSite.entity_backend_class` to `SearchEntityBackend`; sites that
   set their own keep it. Backends receive `limit=` in `search_objects` and

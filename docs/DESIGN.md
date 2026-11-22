@@ -843,6 +843,7 @@ An opt-in app (`INSTALLED_APPS`, label `admin_api_search`) that stores searchabl
   on commit and deletes rows of fields now empty; errors are logged, never raised into the save.
   No `post_delete` receiver: it would disable Django's fast delete for every model, and the
   query-time `EXISTS` hides deleted objects. `post_migrate` replaces the model rows.
+  `indexing_suspended()` (a `ContextVar`, nests) makes `post_save` skip saves in its block.
   `rebuild_search_index` iterates each model's base manager in batches (one transaction each,
   progress per batch), then prunes rows of that model not written by the run. `search_index
   ensure` refreshes model rows and rebuilds models whose fingerprint (index fields, `LANGUAGES`,

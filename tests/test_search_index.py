@@ -7,7 +7,14 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.management import CommandError, call_command
 from django.test import override_settings
 
-from admin_api.contrib.search.indexer import Indexer, _index_saved, local_field_name, on_post_migrate, set_indexer
+from admin_api.contrib.search.indexer import (
+    Indexer,
+    _index_saved,
+    indexing_suspended,
+    local_field_name,
+    on_post_migrate,
+    set_indexer,
+)
 from admin_api.contrib.search.models import SearchEntry, SearchIndexState
 from tests.search_site import PartyAdmin, mcp_site
 from tests.testapp import admin as testadmin
@@ -78,6 +85,26 @@ def test_save_updates_and_drops_empty_fields(indexed):
         party.name = "Acme Corp"
         party.save()
     assert SearchEntry.objects.get(field="name").updated_at > before
+
+
+def test_saves_inside_indexing_suspended_are_skipped(indexed):
+    with indexed(), indexing_suspended():
+        with indexing_suspended():
+            Client.objects.create(name="Inner")
+        skipped = Client.objects.create(name="Bulk")
+    with indexed():
+        kept = Client.objects.create(name="After")
+    assert rows(Client) == [(str(kept.pk), "name", "after")]
+    call_command("rebuild_search_index", stdout=StringIO())
+    assert (str(skipped.pk), "name", "bulk") in rows(Client)
+
+
+def test_indexing_suspended_is_lifted_after_an_error(indexed):
+    with pytest.raises(ValueError), indexing_suspended():
+        raise ValueError
+    with indexed():
+        kept = Client.objects.create(name="After")
+    assert rows(Client) == [(str(kept.pk), "name", "after")]
 
 
 def test_raw_saves_are_skipped(indexer, django_capture_on_commit_callbacks):

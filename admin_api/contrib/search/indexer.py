@@ -7,9 +7,11 @@ batched rebuild behind ``rebuild_search_index`` and ``search_index ensure``.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
+from contextvars import ContextVar
 from functools import cached_property
 
 from django.apps import apps
@@ -29,6 +31,7 @@ logger = logging.getLogger("admin_api.search")
 INDEX_FORMAT = 1
 INDEXED_FIELD_TYPES = (models.CharField, models.TextField, models.IntegerField, models.DecimalField)
 LABEL_FIELDS = ("verbose_name", "verbose_name_plural", "model_name")
+_suspended = ContextVar("admin_api_search_suspended", default=False)
 
 
 def local_field_name(model, search_field: str) -> str | None:
@@ -285,8 +288,19 @@ def _index_saved(indexer: Indexer, obj) -> None:
         logger.exception("search index: could not index %s %r", obj._meta.label_lower, obj.pk)
 
 
+@contextlib.contextmanager
+def indexing_suspended():
+    """Saves inside the block (this thread or task only) skip the index, for bulk loads.
+    Run ``rebuild_search_index`` after the load."""
+    token = _suspended.set(True)
+    try:
+        yield
+    finally:
+        _suspended.reset(token)
+
+
 def on_post_save(sender, instance, raw=False, using=DEFAULT_DB_ALIAS, **kwargs):
-    if raw:
+    if raw or _suspended.get():
         return
     try:
         indexer = get_indexer()
