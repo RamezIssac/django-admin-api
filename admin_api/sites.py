@@ -5,12 +5,14 @@ from weakref import WeakSet
 
 from django.contrib import admin
 from django.urls import path
+from django.utils.translation import gettext
 from django.views.decorators.csrf import csrf_exempt
 
 from .auth import SessionAuthenticator, TokenAuthenticator
 from .contrib.subadmin import SubAdminAdapter
 from .errors import ApiError, MethodNotAllowed, NotAuthenticated, PermissionDeniedError
 from .mixins import ApiAdminMixin
+from .services import _api_base
 
 _all_sites: WeakSet = WeakSet()
 
@@ -165,8 +167,14 @@ class AdminApiSite:
                 self.authenticate(request)
                 if not self.has_permission(request):
                     raise PermissionDeniedError()
+            except ApiError as exc:  # the index would refuse too: no capabilities hint
+                return exc.as_response()
+            try:
                 return view(request, *args, **kwargs)
             except ApiError as exc:
+                index = exc.hint_capabilities and _api_base(self)
+                if index:  # None when the API urls are not mounted under this site's namespace
+                    exc.extra["help"] = gettext("GET %(url)s to see what you may do on each model.") % {"url": index}
                 return exc.as_response()
 
         return inner

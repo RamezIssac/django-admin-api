@@ -21,6 +21,7 @@ from .. import custom_views, services
 from ..changelist import PER_PAGE_PARAM, SHAPE_PARAM, describe_columns, get_columns
 from ..errors import InvalidArguments, NotFound, PermissionDeniedError
 from ..nested import ModelPath
+from ..scopes import OPS
 from ..writes import ValidationFailed
 from . import confirm
 from .resolve import DEFAULT_LIMIT, MAX_LIMIT, MAX_TERMS, resolve_entities
@@ -147,10 +148,9 @@ def _filters_query(args) -> QueryDict:
     return query
 
 
-def _effective_perms(site, perms: dict) -> dict:
-    if site.read_only:
-        return {k: (v if k == "view" else False) for k, v in perms.items()}
-    return perms
+def _can(site, perms: dict) -> list[str]:
+    """The operations of ``perms`` (``get_model_perms``) allowed on this site: only view when read-only."""
+    return [op for op in OPS if perms.get(op) and (op == "view" or not site.read_only)]
 
 
 def _ordering_param(model_admin, request, ordering) -> str:
@@ -341,7 +341,7 @@ def list_models(site, request, args) -> dict:
                 "name_plural": entry["name_plural"],
                 "model": path.label,
                 "app": app["name"],
-                "perms": _effective_perms(site, entry["perms"]),
+                "can": _can(site, entry["perms"]),
             }
             if path.depth:
                 item["nested_under"] = entry["nested_under"]
@@ -349,6 +349,8 @@ def list_models(site, request, args) -> dict:
             if description:
                 item["description"] = description
             if chain[-1].has_view_or_change_permission(request):
+                if not site.read_only and (actions := list(chain[-1].get_actions(request))):
+                    item["actions"] = actions
                 views = _views(site, request, chain[-1])
                 if views:
                     item["views"] = [_view_summary(spec) for spec in views]
@@ -372,7 +374,7 @@ def describe_model(site, request, args) -> dict:
         "name_plural": schema["model"]["name_plural"],
         "model": label,
         "id_field": schema["model"]["pk"],
-        "perms": _effective_perms(site, schema["perms"]),
+        "can": _can(site, schema["perms"]),
         "columns": [
             {k: c[k] for k in ("name", "label", "type", "sortable", "choices") if k in c} for c in schema["columns"]
         ],
@@ -565,7 +567,8 @@ TOOLS = [
     ToolSpec(
         name="list_models",
         title="List models",
-        description="List the data models you can access, with your permissions on each. Start here.",
+        description="List the data models you can access, with what you may do on each: 'can' (view, add, "
+        "change, delete), 'actions' and 'views'. Start here, and check it after a permission error.",
         input_schema=obj({}),
         output_schema=ANY_OBJECT,
         handler=list_models,

@@ -74,6 +74,9 @@ def test_default_instructions_ask_for_business_language():
     assert 'Say "ID" only when the user asks or two records share a label.' in DEFAULT_INSTRUCTIONS
     assert "listing each candidate's label and the kind of record." in DEFAULT_INSTRUCTIONS
     assert "'ambiguous': ask which one before running anything (not a run per candidate)" in DEFAULT_INSTRUCTIONS
+    assert (
+        "'none': say nothing matched and ask whether to run it for everyone; run nothing more." in DEFAULT_INSTRUCTIONS
+    )
     assert "label and model" not in DEFAULT_INSTRUCTIONS
 
 

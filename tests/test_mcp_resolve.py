@@ -221,13 +221,23 @@ def test_excluded_models(resolve, data):
 def test_hidden_model_answers_like_an_unknown_one(resolve, data):
     Tag.objects.create(name="alpha")
     for label in ("testapp.tag", "testapp.nope", "testapp.secret"):
-        assert resolve({"text": "alpha", "models": [label]})["objects"] == {
-            "status": "none",
-            "more": False,
-            "candidates": [],
-            "searched_models": [],
+        assert resolve({"text": "alpha", "models": ["testapp.client", label]}) == {
+            "error": "invalid_arguments",
+            "status": 400,
+            "detail": f"Unknown model {label!r}: use a 'model' from list_models.",
         }
     assert resolve({"text": "tag", "kind": "models"})["models"]["status"] == "none"
+
+
+def test_model_labels_in_any_case(resolve, data):
+    alpha = [("testapp.client", data["clients"]["Alpha"].pk)]
+    assert ids(resolve({"text": "alpha", "models": ["TestApp.Client", " testapp.client"]})["objects"]) == alpha
+    assert ids(resolve("alpha", models=["testapp.Client"])["objects"]) == alpha
+    field = {"model": "TestApp.Payment", "field": "client"}
+    assert ids(resolve({"text": "alpha", "for_field": field})["objects"]) == alpha
+    assert resolve("alpha", models=["testapp.Clients"])["detail"] == (
+        "Unknown model 'testapp.Clients': use a 'model' from list_models."
+    )
 
 
 def test_for_field_with_limit_choices_to(resolve, data):
@@ -258,7 +268,7 @@ def test_for_field_errors(resolve, data, staff_view_clients):
         {"text": "x", "for_field": {"model": "testapp.payment", "field": "client"}}, user=staff_view_clients
     )
     unknown = resolve({"text": "x", "for_field": {"model": "testapp.nope", "field": "client"}})
-    assert hidden["error"] == unknown["error"] == "not_found"
+    assert hidden["error"] == unknown["error"] == "invalid_arguments"
 
 
 def test_models(resolve, data):
@@ -417,9 +427,14 @@ def test_for_field_error_messages(resolve, data):
         return resolve({"text": "x", "for_field": {"model": model, "field": field}}, **kwargs)["detail"]
 
     assert detail("amount") == "'amount' is not a relation field of testapp.payment's form."
+    out = resolve({"text": "x", "for_field": {"model": "testapp.client", "field": "id"}})
+    assert out["help"] == (
+        "for_field only fills a create/update relation field. To find a testapp.client by name, "
+        "pass 'models': ['testapp.client'] instead."
+    )
     assert detail("inlines.nope.sales") == "No inline 'nope' on testapp.payment. Inlines: lines."
     assert detail("inlines.nope.x", model="testapp.client") == "No inline 'nope' on testapp.client. Inlines: none."
-    assert detail("client", model="testapp.nope") == "This kind of record is not available here."
+    assert detail("client", model="testapp.nope") == "Unknown model 'testapp.nope': use a 'model' from list_models."
     no_clients = LiveMcpSite(api_site, excluded_models=("auth", "testapp.client"))
     assert detail("client", site=no_clients) == "This kind of record is not available here."
 

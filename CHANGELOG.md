@@ -100,6 +100,22 @@
 - **Write views log a change.** `@admin_api.view(writes=True)` run on one record (REST and MCP)
   creates a `LogEntry` like create and update do: `Ran <view title>.` (plus `Via MCP.`), without
   parameter values. A dry run rolls it back; write views on no single record log nothing.
+- **MCP `list_models` says what the user may do on each model**: `can` (the allowed operations of
+  `view`, `add`, `change`, `delete`) and `actions` (the admin action names `get_actions(request)`
+  allows), next to `views`. `can` replaces the `perms` object in `list_models` and
+  `describe_model`; read-only sites give `["view"]` and no actions. REST keeps `perms`.
+- **Permission errors point to that list.** A 403 `permission_denied` (or `read_only`) and the 404
+  for an action the user may not run add `help`: on MCP "Call list_models to see what you may do
+  on each model.", on REST "GET /api/v1/ to see what you may do on each model." Denials before any
+  model (site access, CSRF, origin) carry no `help`.
+- **`resolve_entities` reads model labels in any case** (`store.Client` is `store.client`, as in
+  `list_objects`), in `models` and `for_field`. An unknown or hidden label is an `invalid_arguments`
+  error naming it (was `status: none` with `searched_models: []`). A `for_field` that is not a
+  relation field adds `help`: pass `models` to find a record by name.
+- Instruction line 6, `none`: say nothing matched and ask whether to run it for everyone; run
+  nothing more (was: offer the unfiltered answer).
+- `AdminMcpSite.excluded_tools` (and `excluded_tools=`): tool names left out of `tools/list`. With
+  `read_only=True, excluded_tools=["get_history"]` a question-answering client gets 6 generic tools.
 
 ## 0.1.0a3 (2026-11-19)
 

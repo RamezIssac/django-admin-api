@@ -401,7 +401,7 @@ PATCH /api/v1/store/sales/7/
      "inlines": {"items": {"rows": [{"index": 1, "pk": 41, "errors": {"quantity": ["…"]}}],
                            "non_form_errors": []}}}
 401 {"error": "not_authenticated"}
-403 {"error": "permission_denied"}
+403 {"error": "permission_denied", "help": "GET /api/v1/ to see what you may do on each model."}
 404 {"error": "not_found"}
 400 {"error": "bad_lookup", "detail": "…"}
 409 {"error": "conflict"}            # IntegrityError
@@ -652,7 +652,7 @@ urlpatterns += [path("mcp/", mcp_site.urls)]
 
 | Tool | Arguments | Backed by |
 |---|---|---|
-| `list_models` | – | `services.registry` + `mcp_description` |
+| `list_models` | – | `services.registry` + `mcp_description`; per model `can` (allowed operations), `actions` (allowed names), `views` |
 | `describe_model` | `model`, `id?` | `services.schema` + `input_schemas` (per object with `id`) |
 | `list_objects` | `model`, `filters{}`, `search`, `ordering[]`, `page`, `per_page` | `services.changelist`, always columnar, 25/page default |
 | `get_object` | `model`, `id` | `services.detail` |
@@ -679,7 +679,8 @@ urlpatterns += [path("mcp/", mcp_site.urls)]
 - `model` is `"app_label.model_name"`. `ordering` takes column names (`"-date"`), translated to
   the admin's `o=` indexes; `filters` are the admin's own changelist parameters, as listed by
   `describe_model` (`filters[].choices[].params`).
-- Errors are `isError` results carrying the REST envelope plus `status`. An invalid **dry run**
+- Errors are `isError` results carrying the REST envelope plus `status`. Permission errors add
+  `help`: call `list_models` to see what the user may do. An invalid **dry run**
   is a normal result (`{"dry_run": true, "valid": false, "errors": …}`).
 - Annotations: reads are `readOnlyHint`; update/delete/actions `destructiveHint`.
 

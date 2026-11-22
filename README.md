@@ -114,6 +114,7 @@ permissions, validation, ERP hooks and audit trail as the HTML admin.
 from admin_api.mcp import AdminMcpSite
 
 mcp_site = AdminMcpSite(api_site)            # AdminMcpSite(api_site, read_only=True) for reads only
+# AdminMcpSite(api_site, read_only=True, excluded_tools=["get_history"]): question answering, 5 tools fewer
 urlpatterns += [path("mcp/", mcp_site.urls)]  # Streamable HTTP
 ```
 
