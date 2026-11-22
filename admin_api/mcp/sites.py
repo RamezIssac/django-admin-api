@@ -132,10 +132,9 @@ class AdminMcpSite:
         user's :class:`~admin_api.models.McpUserInstructions`, cut to ``instructions_max_length``."""
         from ..models import McpUserInstructions
 
-        user = getattr(request, "user", None)
         own = None
-        if user is not None and user.is_authenticated:
-            own = McpUserInstructions.objects.filter(user=user).values_list("instructions", flat=True).first()
+        if request.user.is_authenticated:
+            own = McpUserInstructions.objects.filter(user=request.user).values_list("instructions", flat=True).first()
         text = f"{self.instructions}\n{USER_INSTRUCTIONS_HEADING}\n{own}" if own else self.instructions
         if len(text) > self.instructions_max_length:
             text = text[: self.instructions_max_length - len(TRIMMED_NOTE)] + TRIMMED_NOTE
