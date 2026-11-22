@@ -126,7 +126,7 @@ class McpUserMemoryAdmin(admin.ModelAdmin):
 
     api_enabled = False  # never expose memory through the API itself
 
-    list_display = ["key", "kind", "user", "value", "updated", "expires_at"]
+    list_display = ["key", "kind", "user", "value", "updated"]
     list_filter = ["kind", "key"]
     search_fields = ["key", "user__username"]
     form = McpUserMemoryForm
@@ -136,7 +136,7 @@ class McpUserMemoryAdmin(admin.ModelAdmin):
         return qs if request.user.is_superuser else qs.filter(user=request.user)
 
     def get_fields(self, request, obj=None):
-        fields = ["kind", "key", "value", "expires_at"]
+        fields = ["kind", "key", "value"]
         return ["user", *fields] if request.user.is_superuser else fields
 
     def save_model(self, request, obj, form, change):

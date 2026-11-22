@@ -1,16 +1,13 @@
 """Per-user MCP memory: audience, language and notes feed the instructions and translation hooks."""
 
 import json
-from datetime import timedelta
 from decimal import Decimal
-from io import StringIO
 
 import pytest
 from django.contrib import admin
 from django.contrib.auth import get_user_model
-from django.core.management import call_command
 from django.test import override_settings
-from django.utils import timezone, translation
+from django.utils import translation
 
 from admin_api import AdminApiSite
 from admin_api.admin import ApiTokenAdmin, McpUserMemoryAdmin
@@ -243,36 +240,11 @@ def test_memory_rows_go_with_the_user(superuser):
 
 
 # --------------------------------------------------------------------------------------------
-# retention
-# --------------------------------------------------------------------------------------------
-def test_prune_deletes_old_picks_and_expired_rows(superuser):
-    now = timezone.now()
-    old_pick = McpUserMemory.objects.create(user=superuser, kind="picked", key="ahmed", value={"id": 1})
-    new_pick = McpUserMemory.objects.create(user=superuser, kind="picked", key="sara", value={"id": 2})
-    expired = remember(superuser, "notes", "temporary")
-    kept = remember(superuser, "language", "ar")
-    McpUserMemory.objects.filter(pk=old_pick.pk).update(updated=now - timedelta(days=181))
-    McpUserMemory.objects.filter(pk=kept.pk).update(updated=now - timedelta(days=400))
-    McpUserMemory.objects.filter(pk=expired.pk).update(expires_at=now - timedelta(minutes=1))
-
-    out = StringIO()
-    call_command("prune_mcp_memory", "--dry-run", stdout=out)
-    assert out.getvalue().strip() == "2 memory rows would be deleted."
-    assert McpUserMemory.objects.count() == 4
-
-    out = StringIO()
-    call_command("prune_mcp_memory", "--batch-size", "1", stdout=out)
-    assert out.getvalue().splitlines() == ["deleted 1/2", "deleted 2/2", "2 memory rows deleted."]
-    assert set(McpUserMemory.objects.values_list("pk", flat=True)) == {new_pick.pk, kept.pk}
-
-
-# --------------------------------------------------------------------------------------------
 # rows each query reads and writes
 # --------------------------------------------------------------------------------------------
 def test_loading_reads_only_the_users_preference_rows(superuser):
     other = get_user_model().objects.create_superuser("other", "o@x.io", "pw")
     remember(other, "language", "ar")
-    McpUserMemory.objects.create(user=superuser, kind=McpUserMemory.PICKED, key="notes", value="a pick")
     assert load_user_memory(superuser) == UserMemory()
 
 
@@ -287,17 +259,13 @@ def test_setting_and_clearing_touch_only_that_preference_row(superuser):
     remember(other, "audience", "developer")
     remember(superuser, "audience", "developer")
     remember(superuser, "language", "de")
-    pick = McpUserMemory.objects.create(user=superuser, kind=McpUserMemory.PICKED, key="audience", value="a pick")
     set_preference(superuser, "audience", None)
     set_preference(superuser, "notes", "x" * 500)  # the limit itself is allowed
     rows = McpUserMemory.objects.filter(user=superuser, kind=McpUserMemory.PREFERENCE)
     assert sorted(rows.values_list("key", flat=True)) == ["language", "notes"]
     assert McpUserMemory.objects.get(user=other).value == "developer"
-    pick.refresh_from_db()
-    assert pick.value == "a pick"
     set_preference(superuser, "audience", "developer")
-    pick.refresh_from_db()
-    assert pick.value == "a pick" and rows.get(key="audience").value == "developer"
+    assert rows.get(key="audience").value == "developer"
 
 
 def test_set_preference_checks_the_key_type_and_says_when_it_applies(call):
@@ -317,7 +285,7 @@ def test_admin_superuser_sees_and_assigns_every_users_rows(rf, superuser, django
     with django_assert_num_queries(1):
         listed = sorted((r.pk, r.user.username) for r in model_admin.get_queryset(request))
     assert listed == [(rows[0].pk, "root"), (rows[1].pk, "clerk")]
-    assert model_admin.get_fields(request) == ["user", "kind", "key", "value", "expires_at"]
+    assert model_admin.get_fields(request) == ["user", "kind", "key", "value"]
 
     assigned = McpUserMemory(user=clerk, kind="preference", key="language", value="de")
     model_admin.save_model(request, assigned, None, False)
@@ -329,15 +297,13 @@ def test_admin_superuser_sees_and_assigns_every_users_rows(rf, superuser, django
     assert (assigned.user, unassigned.user, forged.user) == (clerk, superuser, clerk)
 
 
-def test_admin_form_cleans_preferences_only(rf, superuser):
+def test_admin_form_cleans_the_preference_value(rf, superuser):
     request = rf.get("/")
     request.user = superuser
     form_class = admin_site._registry[McpUserMemory].get_form(request)
     form = form_class(data={"user": superuser.pk, "kind": "preference", "key": "notes", "value": '"  hi  "'})
     assert form.is_valid(), form.errors
     assert form.cleaned_data["value"] == "hi"
-    pick = {"user": superuser.pk, "kind": "picked", "key": "ahmed", "value": '{"id": 1}'}
-    assert form_class(data=pick).is_valid()
 
 
 def test_api_site_registers_its_admins_once():
@@ -353,15 +319,3 @@ def test_api_site_registers_its_admins_once():
     own.register(McpUserMemory, OwnMemoryAdmin)
     AdminApiSite(own, name="memory_own_api")
     assert type(own._registry[McpUserMemory]) is OwnMemoryAdmin
-
-
-def test_prune_days_default_and_option(superuser):
-    now = timezone.now()
-    pick = McpUserMemory.objects.create(user=superuser, kind="picked", key="ahmed", value={"id": 1})
-    McpUserMemory.objects.filter(pk=pick.pk).update(updated=now - timedelta(days=180, hours=1))
-    out = StringIO()
-    call_command("prune_mcp_memory", "--dry-run", stdout=out)
-    assert out.getvalue().strip() == "1 memory rows would be deleted."
-    out = StringIO()
-    call_command("prune_mcp_memory", "--dry-run", "--days", "200", stdout=out)
-    assert out.getvalue().strip() == "0 memory rows would be deleted."

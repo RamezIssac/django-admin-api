@@ -128,11 +128,10 @@ class McpConfirmation(models.Model):
 
 class McpUserMemory(models.Model):
     """What the MCP server remembers about one user: ``preference`` rows (audience, language, notes,
-    see :mod:`admin_api.memory`) and ``picked`` rows (a resolved term and the record the user chose)."""
+    see :mod:`admin_api.memory`)."""
 
     PREFERENCE = "preference"
-    PICKED = "picked"
-    KIND_CHOICES = [(PREFERENCE, _("Preference")), (PICKED, _("Picked record"))]
+    KIND_CHOICES = [(PREFERENCE, _("Preference"))]
 
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="mcp_memory", verbose_name=_("user")
@@ -141,14 +140,12 @@ class McpUserMemory(models.Model):
     key = models.CharField(_("key"), max_length=200)
     value = models.JSONField(_("value"), blank=True, null=True)
     updated = models.DateTimeField(_("updated"), auto_now=True)
-    expires_at = models.DateTimeField(_("expires at"), null=True, blank=True)
 
     class Meta:
         ordering = ["user", "kind", "key"]
         verbose_name = _("MCP user memory")
         verbose_name_plural = _("MCP user memory")
         constraints = [models.UniqueConstraint(fields=["user", "kind", "key"], name="admin_api_mcp_memory_unique")]
-        indexes = [models.Index(fields=["kind", "updated"], name="admin_api_mcp_memory_age")]
 
     def __str__(self):
         return f"{self.get_kind_display()}: {self.key}"

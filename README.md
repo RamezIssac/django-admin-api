@@ -185,8 +185,6 @@ class ErpMcpSite(AdminMcpSite):
 ```
 
 A new language applies from the next tool call; audience and notes from the next connection.
-`manage.py prune_mcp_memory` deletes `picked` rows unused for `--days` (default 180) and any
-row past its `expires_at`, in batches of `--batch-size` (default 1000), with `--dry-run`.
 
 ### Resolving names
 
