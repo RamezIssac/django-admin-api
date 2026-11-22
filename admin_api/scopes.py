@@ -84,7 +84,12 @@ def request_allows(request, opts, op: str) -> bool:
     return scopes_allow(scopes, opts.app_label, opts.model_name, op)
 
 
-VERBS = {op: gettext_noop(op) for op in ("view", "add", "change", "delete")}
+VERBS = {
+    "view": gettext_noop("view"),
+    "add": gettext_noop("add"),
+    "change": gettext_noop("change"),
+    "delete": gettext_noop("delete"),
+}
 
 
 def check(request, opts, op: str):
