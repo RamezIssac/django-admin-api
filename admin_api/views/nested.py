@@ -2,7 +2,8 @@
 
 ``/v1/<app>/<model>/<pk>/<child>/[<pk>/<child>/…]`` followed by the same tails as a top-level
 model: ``""`` (changelist), ``schema/``, ``actions/<name>/``, ``views/<name>/``, ``<pk>/``,
-``<pk>/delete-preview/``, ``<pk>/views/<name>/``.
+``<pk>/delete-preview/``, ``<pk>/history/``, ``<pk>/views/<name>/``. A child admin cannot be named
+``history``.
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ import re
 from ..errors import MethodNotAllowed, NotFound
 from .changelist import ActionView, ChangeListView, SchemaView
 from .custom import CustomViewView
-from .detail import DeletePreviewView, ObjectView
+from .detail import DeletePreviewView, HistoryView, ObjectView
 
 ROUTES = {
     "changelist": (ChangeListView, ("GET", "POST")),
@@ -20,9 +21,11 @@ ROUTES = {
     "action": (ActionView, ("POST",)),
     "object": (ObjectView, ("GET", "PATCH", "PUT", "DELETE")),
     "delete_preview": (DeletePreviewView, ("GET",)),
+    "history": (HistoryView, ("GET",)),
     "view": (CustomViewView, ("GET", "POST")),
     "object_view": (CustomViewView, ("GET", "POST")),
 }
+OBJECT_TAILS = {"delete-preview": "delete_preview", "history": "history"}  # <pk>/<tail>/
 NESTED_METHODS = ("GET", "POST", "PATCH", "PUT", "DELETE")
 _SEGMENT_RE = re.compile(r"^[a-z_][a-z0-9_]*$")  # a model_name
 
@@ -35,7 +38,7 @@ def parse_nested(nested: str) -> tuple[list[str], list[str], str, dict]:
     def is_tail(rest):
         if len(rest) == 3:
             return rest[1] == "views"
-        return len(rest) == 2 and (rest[0] in ("actions", "views") or rest[1] == "delete-preview")
+        return len(rest) == 2 and (rest[0] in ("actions", "views") or rest[1] in OBJECT_TAILS)
 
     while len(parts) >= 2 and not is_tail(parts):
         parents.append(parts[0])
@@ -55,7 +58,7 @@ def parse_nested(nested: str) -> tuple[list[str], list[str], str, dict]:
         return segments, parents, "object_view", {"object_id": parts[0], "view_name": parts[2]}
     if len(parts) == 1:
         return segments, parents, "object", {"object_id": parts[0]}
-    return segments, parents, "delete_preview", {"object_id": parts[0]}
+    return segments, parents, OBJECT_TAILS[parts[1]], {"object_id": parts[0]}
 
 
 def nested_view(api_site):

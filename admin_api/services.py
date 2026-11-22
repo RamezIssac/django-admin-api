@@ -26,7 +26,7 @@ from .changelist import (
     split_api_params,
 )
 from .encoders import encode_value
-from .errors import NotFound, PermissionDeniedError
+from .errors import InvalidArguments, NotFound, PermissionDeniedError
 from .nested import BadParents, ModelPath, Target
 from .resolver import resolve
 
@@ -190,12 +190,7 @@ def changelist(api_site, model_admin, request) -> dict:
         raise BadLookup(f"{SHAPE_PARAM} must be one of: {', '.join(SHAPES)}.")
     per_page = None
     if PER_PAGE_PARAM in api_params:
-        try:
-            per_page = int(api_params[PER_PAGE_PARAM])
-        except (TypeError, ValueError):
-            per_page = 0
-        if not 1 <= per_page <= api_site.max_page_size:
-            raise BadLookup(f"{PER_PAGE_PARAM} must be between 1 and {api_site.max_page_size}.")
+        per_page = _bounded_int(api_params[PER_PAGE_PARAM], PER_PAGE_PARAM, api_site.max_page_size, BadLookup)
 
     columns = get_columns(model_admin, request)
     cl = build_changelist(model_admin, request, columns, per_page=per_page)
@@ -223,6 +218,17 @@ def changelist(api_site, model_admin, request) -> dict:
     else:
         payload["results"] = [dict(zip(keys, row)) for row in rows]
     return payload
+
+
+def _bounded_int(value, name, maximum, error) -> int:
+    """``value`` (an int or a query-string value) as an int from 1 to ``maximum``, else ``error``."""
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        number = 0
+    if not 1 <= number <= maximum:
+        raise error(f"{name} must be between 1 and {maximum}.")
+    return number
 
 
 def _page_url(request, page):
@@ -341,6 +347,45 @@ def detail(model_admin, request, object_id) -> dict:
     if views and "views" not in payload:  # a model field named "views" wins
         base = _changelist_url(request)
         payload["views"] = {spec.name: view_url(spec, base, obj.pk) for spec in views}
+    return payload
+
+
+HISTORY_LIMIT = 20
+HISTORY_MAX_LIMIT = 100
+
+
+def history(model_admin, request, object_id, limit=None) -> dict:
+    """The admin history (LogEntry) of one object, newest first, as the admin's history page shows
+    it: on the same permission, with the same change messages."""
+    from django.contrib.admin.models import ADDITION, CHANGE, DELETION, LogEntry
+    from django.contrib.admin.options import get_content_type_for_model
+
+    actions = {ADDITION: "added", CHANGE: "changed", DELETION: "deleted"}
+    limit = _bounded_int(HISTORY_LIMIT if limit is None else limit, "'limit'", HISTORY_MAX_LIMIT, InvalidArguments)
+    obj = get_object(model_admin, request, object_id)
+    check_view_permission(model_admin, request, obj)
+    entries = list(
+        LogEntry.objects.filter(object_id=str(obj.pk), content_type=get_content_type_for_model(obj))
+        .select_related("user")
+        .order_by("-action_time", "-pk")[: limit + 1]
+    )
+    payload = {
+        "object": encode_value(obj),
+        "history": [
+            {
+                "when": encode_value(entry.action_time),
+                "user": entry.user.get_username(),
+                "action": actions.get(entry.action_flag),
+                "message": entry.get_change_message(),
+            }
+            for entry in entries[:limit]
+        ],
+    }
+    if len(entries) > limit:
+        payload["hint"] = gettext("Only the newest %(limit)s entries are shown; limit goes up to %(max)s.") % {
+            "limit": limit,
+            "max": HISTORY_MAX_LIMIT,
+        }
     return payload
 
 

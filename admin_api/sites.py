@@ -174,7 +174,7 @@ class AdminApiSite:
     def get_urls(self):
         from .views.changelist import ActionView, ChangeListView, SchemaView
         from .views.custom import CustomViewView
-        from .views.detail import DeletePreviewView, ObjectView
+        from .views.detail import DeletePreviewView, HistoryView, ObjectView
         from .views.nested import NESTED_METHODS, nested_view
         from .views.registry import RegistryView
 
@@ -213,6 +213,7 @@ class AdminApiSite:
                 self.api_view(DeletePreviewView.as_view(api_site=self)),
                 name="delete_preview",
             ),
+            path(f"{model}<str:object_id>/history/", self.api_view(HistoryView.as_view(api_site=self)), name="history"),
             # nested admins: <pk>/<child>/[<pk>/<child>/…] then the same tails as above
             path(
                 f"{model}<path:nested>/",
