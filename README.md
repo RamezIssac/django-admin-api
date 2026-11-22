@@ -110,6 +110,9 @@ Design: [docs/DESIGN.md](docs/DESIGN.md).
   permissions of its user, optionally **narrowed by scopes**:
   `--scope store.sales:view --scope 'cash.*:*'` (`<app>.<model>:<view|add|change|delete>`, `*`
   allowed). Scopes never grant more than the user has.
+* **OAuth 2.1**: add an authenticator in front of the token one, with django-oauth-toolkit as the
+  authorization server, for claude.ai connectors and other MCP clients that sign in with OAuth.
+  Setup, discovery documents and scopes: [Put OAuth in front of the MCP endpoint](docs/oauth.md).
 
 ## MCP
 
@@ -138,6 +141,7 @@ Set `ADMIN_API_MCP_ENABLED = False` in settings to turn the MCP endpoints off (t
 404 `mcp_disabled`, `manage.py mcp_serve` exits with an error). It defaults to `True`.
 
 Step by step, with scopes, `.mcp.json` and troubleshooting: [Connect Claude Code](docs/connect-claude-code.md).
+OAuth sign-in (claude.ai custom connectors): [docs/oauth.md](docs/oauth.md).
 
 Tools: `list_models`, `describe_model` (columns, filters, actions, custom views, JSON Schema),
 `list_objects` (admin filters, search, ordering, paging), `resolve_entities` (names to ids and

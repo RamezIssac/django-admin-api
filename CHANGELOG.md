@@ -128,6 +128,10 @@
 - An MCP dry run validates uploads and stores no file.
 - A body over `DATA_UPLOAD_MAX_MEMORY_SIZE` answers `413 payload_too_large` as JSON (REST and MCP
   HTTP), not Django's HTML 400.
+- **Docs: OAuth in front of the MCP endpoint** ([docs/oauth.md](docs/oauth.md)). django-oauth-toolkit
+  is the authorization server (DCR, CIMD, PKCE, RFC 9728 and RFC 8414 discovery). A project-side
+  `OAuthAuthenticator` in `AdminMcpSite.authenticators` maps the access token to its user and its
+  scopes to library scopes. A 401 points clients at the resource metadata.
 
 ## 0.1.0a3 (2026-11-19)
 
