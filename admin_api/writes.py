@@ -320,24 +320,30 @@ def _build_inline(data, prefix, FormSet, inline, request, obj, change, rows, inl
 # --------------------------------------------------------------------------------------------
 # pipeline
 # --------------------------------------------------------------------------------------------
-def default_process_changeform(model_admin, request, obj, change) -> ChangeformResult:
-    """``ModelAdmin._changeform_view`` without rendering. ``request`` is a POST request."""
-    add = not change
+def validate_changeform(model_admin, request, obj, change) -> ChangeformResult:
+    """The admin's form and inline validation of ``request.POST``; nothing is saved."""
     ModelForm = model_admin.get_form(request, obj, change=change)
     form = ModelForm(request.POST, request.FILES, instance=obj)
     formsets, _inline_instances = model_admin._create_formsets(request, form.instance, change=change)
     form_validated = form.is_valid()
-    new_object = model_admin.save_form(request, form, change=change) if form_validated else form.instance
-    if all_valid(formsets) and form_validated:
-        model_admin.save_model(request, new_object, form, change)
-        model_admin.save_related(request, form, formsets, change)
-        change_message = model_admin.construct_change_message(request, form, formsets, add)
-        if add:
-            model_admin.log_addition(request, new_object, change_message)
-        else:
-            model_admin.log_change(request, new_object, change_message)
-        return ChangeformResult(True, new_object, form, formsets, change)
-    return ChangeformResult(False, None, form, formsets, change)
+    return ChangeformResult(all_valid(formsets) and form_validated, None, form, formsets, change)
+
+
+def default_process_changeform(model_admin, request, obj, change) -> ChangeformResult:
+    """``ModelAdmin._changeform_view`` without rendering. ``request`` is a POST request."""
+    result = validate_changeform(model_admin, request, obj, change)
+    if not result.valid:
+        return result
+    new_object = model_admin.save_form(request, result.form, change=change)
+    model_admin.save_model(request, new_object, result.form, change)
+    model_admin.save_related(request, result.form, result.formsets, change)
+    change_message = model_admin.construct_change_message(request, result.form, result.formsets, not change)
+    if change:
+        model_admin.log_change(request, new_object, change_message)
+    else:
+        model_admin.log_addition(request, new_object, change_message)
+    result.obj = new_object
+    return result
 
 
 def _revision_context(model_admin, request):
@@ -408,10 +414,16 @@ def _form_errors(form) -> dict:
 # --------------------------------------------------------------------------------------------
 # entry point
 # --------------------------------------------------------------------------------------------
-def save_from_payload(model_admin, request, obj, payload: dict, *, change: bool, partial: bool):
+def save_from_payload(model_admin, request, obj, payload: dict, *, change: bool, partial: bool, dry_run=False):
     data = build_post_data(model_admin, request, obj, payload, change=change, partial=partial)
     post_request = as_post_request(request, data)
-    result = run_changeform(model_admin, post_request, obj, change)
+    if dry_run:  # the admin's own validate_changeform(request, obj, change), else the default one
+        own = getattr(model_admin, "validate_changeform", None)
+        result = own(post_request, obj, change) if own else validate_changeform(model_admin, post_request, obj, change)
+        if not result.valid:
+            raise ValidationFailed(**result_errors(result))
+    else:
+        result = run_changeform(model_admin, post_request, obj, change)
     return result, post_request._messages.captured()
 
 

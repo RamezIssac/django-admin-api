@@ -66,9 +66,7 @@ DATA_ARG = {
 DRY_RUN_ARG = {
     "type": "boolean",
     "default": False,
-    "description": "Validate and run the full save pipeline, then roll everything back. "
-    "Use it to check a write before doing it. E-mail the write would send is listed in "
-    "'suppressed_emails' and not sent.",
+    "description": "Check the write with the admin's validation and save nothing. Use it before doing the write.",
 }
 CONFIRM_TOKEN_ARG = {
     "type": "string",
