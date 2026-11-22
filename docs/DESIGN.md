@@ -406,8 +406,7 @@ PATCH /api/v1/store/sales/7/
 - Reads return `{"name", "url"}` (the storage's url), or `null` when empty.
 - Base64 adds a third: `DATA_UPLOAD_MAX_MEMORY_SIZE` (Django default 2.5 MB) must hold the whole
   JSON body. A larger body answers `413 payload_too_large` (REST and MCP HTTP).
-- An MCP dry run deletes the files it stored (`dryrun.delete_stored_files`, a `ContextVar` around
-  `Storage.save`), so the confirmed write stores the same name the dry run showed.
+- An MCP dry run validates the upload (base64, name, size, the form field) and stores nothing.
 
 ### 6.4 Error envelope
 
@@ -680,7 +679,6 @@ urlpatterns += [path("mcp/", mcp_site.urls)]
 | `run_action` | `model`, `action`, `ids[]` or `all` + `filters{}`, `confirm` | `services.run_action` (no dry run; `delete_selected` without `confirm` returns `deletion.deletion_summary` of the selection) |
 | `run_view` | `model`, `view`, `id?`, `params{}`, `dry_run` | `services.run_view` (§16) |
 | *view tools* | `id?`, the view's params, `dry_run?` | views with `mcp_tool=` (§16) |
-| `set_preference` | `key`, `value` | the caller's own `McpUserMemory` preference row (§14.11) |
 
 - MCP speaks `id` and `label` where REST speaks `pk` and `str` (0.1.0a4): object heads, inline
   rows, every related record (`{"id", "label"}`), `list_objects` `columns[0]`, `describe_model`
@@ -709,21 +707,22 @@ urlpatterns += [path("mcp/", mcp_site.urls)]
   admin overrides to return another attribute, e.g.
   `def get_mcp_description(self, request): return self.description`.
 - `request.is_mcp` (MCP requests are also `is_api`, so all `api_` twins apply).
-- `request.is_dry_run`: during a dry run the whole pipeline runs (hooks, signals, `LogEntry`,
-  reversion) inside `atomic()` and is rolled back; `transaction.on_commit` callbacks are
-  discarded. E-mail is captured (`admin_api/mcp/dryrun.py`): every e-mail backend opened during
-  the dry run collects its messages, which the result lists as `suppressed_emails` (`recipients`,
-  `subject`). The capture is a `ContextVar`, so concurrent requests still send; a connection
-  opened before the dry run still sends. Files stored through `Storage.save` during the dry run
-  are deleted after it. **Other non-DB side effects still happen.**
-  Note: run side effects from `transaction.on_commit` and not from `save()` or a signal, because
-  a dry run drops `on_commit` callbacks. Mail sent from `on_commit` is not in `suppressed_emails`.
+- **Dry runs validate only** (0.1.0a4). `services.create/update(dry_run=True)` run the permission
+  checks and `get_object` (the admin's queryset), build the POST data and call the admin's
+  `validate_changeform(request, obj, change)` when it defines one, else
+  `writes.validate_changeform`: `get_form`, `_create_formsets`, `form.is_valid()`, `all_valid`.
+  No `save_form`, `save_model`, `save_related`, `log_*` or custom `process_changeform` runs:
+  no signals, side effects or writes. `request.is_dry_run` is `True` during the
+  validation. A write view's dry run runs `view_object`, the permission checks and `clean_params`
+  and does not call the view; invalid params give `valid: false`. Results:
+  `{"dry_run", "valid", "errors" | "note"}` plus `confirm_token` when gated; `object` and
+  `totals` come with the real write.
 - `ApiRequestMiddleware` sets `is_api`, `is_mcp` and `is_dry_run` to `False` on every request.
 - `AdminMcpSite.get_instructions(request)` is sent at `initialize`; the HTTP view builds one SDK
-  `Server` per request, stdio asks once at start. Default: `instructions` adjusted to the user's
-  memory (§14.11). `AdminMcpSite.get_language(request)` (default: the user's `language`
-  preference, else `None` to keep the active language, e.g. from `LocaleMiddleware`) wraps
-  `call_tool` and `get_tools` in `translation.override`.
+  `Server` per request, stdio asks once at start. Default: `instructions` plus the user's
+  `McpUserInstructions` (§14.11). `AdminMcpSite.get_language(request)` (default `None`: keep the
+  active language, e.g. from `LocaleMiddleware`) wraps `call_tool` and `get_tools` in
+  `translation.override`.
 
 ### 14.4 JSON Schema
 
@@ -763,7 +762,7 @@ Three generic additions to the create/update/dry-run path. None is specific to o
 `api_detail_fields` entries. A write result carries them as `totals` next to `object` (REST:
 `totals` inside the object, like `messages`). `services._saved` reloads the object through the
 admin's queryset after the save, inside the transaction, so values written by signals or
-`QuerySet.update()` show up in `object` and `totals`, in a dry run too.
+`QuerySet.update()` show up in `object` and `totals`.
 
 **`require_dry_run`.** `AdminMcpSite(api_site, require_dry_run=True)` (default `False`); an admin
 overrides it with `mcp_require_dry_run = True | False`. The gate covers `create_object`,
@@ -931,27 +930,19 @@ An opt-in app (`INSTALLED_APPS`, label `admin_api_search`) that stores searchabl
   `test_search_engines.py` (settings, an in-memory engine without `scope_pushdown`),
   `test_search_postgres.py` (nox `tests_postgres`, CI job `postgres` on Postgres 17).
 
-### 14.11 Per-user memory (0.1.0a4)
+### 14.11 Per-user instructions (0.1.0a4)
 
-- **Store.** `admin_api.McpUserMemory`: `user` (FK, CASCADE), `kind` (`preference`),
-  `key`, `value` (JSON), `updated`; unique on `(user, kind, key)`. `admin_api` is
-  in the default `excluded_models` and `McpUserMemoryAdmin` has `api_enabled = False`, so no
-  generic tool lists or reads it.
-- **Preferences** (`admin_api.memory`): `audience` (`business` default, `developer`), `language`
-  (a `settings.LANGUAGES` code, through `get_supported_language_variant`), `notes` (500
-  characters). A stored value that no longer validates falls back to the default.
-- **Loading.** `AdminMcpSite.get_user_memory(request)` runs one query and caches a `UserMemory`
-  on `request.mcp_memory`; `prepare_request`, `get_instructions` and `get_language` all go
-  through it. Anonymous users get the defaults without a query.
-- **Instructions.** `developer` replaces `BUSINESS_WORDING` with `DEVELOPER_WORDING` when the
-  site's instructions contain it; `language` appends "Answer the user in <language name>.";
-  `notes` are appended as the user's own notes. No rows: exactly `instructions`.
-- **`set_preference(key, value)`** writes only `request.user`'s preference rows; an empty value
-  deletes the row. It is not a write tool (listed on read-only sites). The audit log records
-  the tool name only, never the value.
-- **Admin.** `McpUserMemoryAdmin` is registered next to the token admin; users see and edit
-  their own rows, superusers everyone's; preference values are validated in the form.
-- Tests: `tests/test_mcp_memory.py`.
+- **Store.** `admin_api.McpUserInstructions`: `user` (one-to-one, CASCADE) and `instructions`
+  (text). `admin_api` is in the default `excluded_models` and `McpUserInstructionsAdmin` has
+  `api_enabled = False`: no generic tool lists or reads it. Who may edit a row is the admin's
+  ordinary model permissions.
+- **Instructions.** `get_instructions` runs one query for an authenticated user (none for
+  anonymous) and appends `USER_INSTRUCTIONS_HEADING` and the text after `instructions`. A total
+  over `instructions_max_length` (4,096), with or without a user row, is cut to that length,
+  ending in `TRIMMED_NOTE`.
+- The business wording is the site default; a developer user gets "model paths and field names
+  are fine" in their own instructions.
+- Tests: `tests/test_mcp_instructions.py`.
 
 ## 15. Nested admins (milestone 17, as built)
 

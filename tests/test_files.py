@@ -285,8 +285,7 @@ def test_mcp_create_and_read(call, media):
 def test_mcp_dry_run_stores_no_file(call, media, doc):
     before = stored(media)
     out, err = call("create_object", create_args(dry_run=True))
-    assert not err and out["valid"] is True, out
-    assert out["object"]["file"]["name"].startswith("docs/lease")
+    assert not err and out["valid"] is True and "object" not in out, out
     assert Document.objects.count() == 1
     rows = [{"id": doc.attachments.order_by("pk").first().pk, "file": upload("a3.txt")}]
     args = {"model": "testapp.document", "id": doc.pk, "data": {"inlines": {"attachments": rows}}, "dry_run": True}
@@ -314,5 +313,5 @@ def test_mcp_confirm_token_write_matches_its_dry_run(call, media):
     assert stored(media) == []
     out, err = call("create_object", create_args(confirm_token=dry["confirm_token"]), site=gated)
     assert not err, out
-    assert out["object"]["file"] == dry["object"]["file"]
+    assert out["object"]["file"]["name"] == "docs/lease.txt"
     assert stored(media) == ["attachments/t.txt", "docs/lease.txt"]

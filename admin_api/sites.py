@@ -55,12 +55,12 @@ class AdminApiSite:
         _all_sites.add(self)
 
     def register_token_admin(self):
-        """Register the API token and MCP user memory admins on the wrapped admin site (once)."""
-        from .admin import ApiTokenAdmin, McpUserMemoryAdmin
+        """Register the API token and MCP user instructions admins on the wrapped admin site (once)."""
+        from .admin import ApiTokenAdmin, McpUserInstructionsAdmin
         from .auth import get_token_model
-        from .models import McpUserMemory
+        from .models import McpUserInstructions
 
-        for model, model_admin in ((get_token_model(), ApiTokenAdmin), (McpUserMemory, McpUserMemoryAdmin)):
+        for model, model_admin in ((get_token_model(), ApiTokenAdmin), (McpUserInstructions, McpUserInstructionsAdmin)):
             if not self.admin_site.is_registered(model):
                 self.admin_site.register(model, model_admin)
 

@@ -6,7 +6,8 @@ import pytest
 from asgiref.sync import async_to_sync
 from django.test import AsyncClient, override_settings
 
-from admin_api.models import ApiToken
+from admin_api.mcp.sites import DEFAULT_INSTRUCTIONS, USER_INSTRUCTIONS_HEADING
+from admin_api.models import ApiToken, McpUserInstructions
 from tests.testapp.models import Client, Sales
 
 VERSION = "2025-06-18"
@@ -55,9 +56,16 @@ def test_initialize(client, token):
     assert out["instructions"].startswith("This server gives you the user's business records and documents.")
 
 
+def test_initialize_sends_the_users_instructions(client, token, superuser):
+    McpUserInstructions.objects.create(user=superuser, instructions="Answer in Arabic.")
+    params = {"protocolVersion": VERSION, "capabilities": {}, "clientInfo": {"name": "pytest", "version": "1"}}
+    out = rpc(client, token, "initialize", params)["result"]
+    assert out["instructions"] == f"{DEFAULT_INSTRUCTIONS}\n{USER_INSTRUCTIONS_HEADING}\nAnswer in Arabic."
+
+
 def test_tools_list(client, token):
     tools = {t["name"]: t for t in rpc(client, token, "tools/list", {})["result"]["tools"]}
-    assert len(tools) == 14  # 12 generic + 2 views published with mcp_tool=
+    assert len(tools) == 13  # 11 generic + 2 views published with mcp_tool=
     assert tools["list_models"]["annotations"]["readOnlyHint"] is True
     assert tools["delete_object"]["annotations"]["destructiveHint"] is True
     assert tools["create_object"]["inputSchema"]["required"] == ["model", "data"]
