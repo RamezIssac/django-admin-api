@@ -34,11 +34,13 @@
   (`{"id", "label"}`), `list_objects` `columns[0]`, write results, delete previews, view results;
   `describe_model` `pk_field` is now `id_field`. `list_models` items start with `name`. The tool
   arguments are `id` and `ids`; `pk` and `pks` stay accepted as aliases for one release. An inline
-  row sent with `id` updates that row.
+  row sent with `id` updates that row, and `describe_model`'s update schema names that key `id`.
 - Messages use verbose names and "ID", wrapped in `gettext`: `"No sales with ID 9."`,
   `"This connection may not change sales."`, `"No view 'x' on sales."`, notes say "the ID shown
   is provisional". Unknown, hidden and excluded models all answer `"This kind of record is not
   available here."` (was `No API for app.model` / `No MCP access to app.model`).
+- `import admin_api` works without Django settings: the scope verbs and error default details are
+  `gettext_lazy` strings.
 - `PermissionDeniedError` has a default detail ("You do not have permission to do this."); the
   services pass one per operation (`"You may not change this sales."`). Promoted view tools say
   "(Same as run_view 'post' on sales.)" and "ID of the sales.".

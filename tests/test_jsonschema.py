@@ -50,7 +50,10 @@ def test_update_schema(api):
     row = update["properties"]["inlines"]["properties"]["items"]["items"]
     assert "required" not in row
     assert row["properties"]["pk"]["type"] == "integer" and row["properties"]["_delete"]["type"] == "boolean"
-    assert "need: product" in update["properties"]["inlines"]["properties"]["items"]["description"]
+    assert row["properties"]["_delete"]["description"] == "Delete the existing row given by pk."
+    assert (
+        "New rows (without pk) need: product." in update["properties"]["inlines"]["properties"]["items"]["description"]
+    )
 
 
 def test_api_readonly_twin_respected(api):
