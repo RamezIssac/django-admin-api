@@ -1,6 +1,7 @@
 name: Mutation
 
 # Mutation testing of the lines a PR changed; report only (see CONTRIBUTING.md).
+# PR comment (pr-comment.yml) posts mutants/comment.md on the PR.
 on:
   pull_request:
 
@@ -10,7 +11,6 @@ concurrency:
 
 permissions:
   contents: read
-  pull-requests: write
 
 env:
   FORCE_COLOR: "1"
@@ -21,10 +21,12 @@ jobs:
     timeout-minutes: 45
     env:
       UV_PYTHON: "3.13"
+      BASE: origin/${{ github.base_ref }}
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
@@ -35,10 +37,9 @@ jobs:
           restore-keys: |
             mutmut-${{ github.head_ref }}-
             mutmut-
-      - run: uv run --with mutmut==3.8.1 python scripts/mutate_changed.py "origin/${{ github.base_ref }}"
-      - if: github.event.pull_request.head.repo.full_name == github.repository
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          head -c 60000 mutants/report.md > comment.md
-          gh pr comment ${{ github.event.pull_request.number }} --edit-last --create-if-none --body-file comment.md
+      - run: uv run --with mutmut==3.8.1 python scripts/mutate_changed.py "$BASE"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pr-comment
+          path: mutants/comment.md
+          retention-days: 1
