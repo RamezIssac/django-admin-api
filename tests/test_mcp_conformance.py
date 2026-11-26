@@ -83,6 +83,7 @@ EXPECTED = {
         "list_models",
         "list_objects",
         "post_sale",
+        "resolve_entities",
         "run_action",
         "run_view",
         "update_object",

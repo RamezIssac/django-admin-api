@@ -47,3 +47,14 @@ class SalesItem(models.Model):
 
 class Secret(models.Model):
     name = models.CharField(max_length=100)
+
+
+class Payment(models.Model):
+    # clients with notes are on hold and cannot receive payments
+    client = models.ForeignKey(Client, on_delete=models.PROTECT, limit_choices_to={"notes": ""})
+    amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+
+
+class PaymentLine(models.Model):
+    payment = models.ForeignKey(Payment, on_delete=models.CASCADE, related_name="lines")
+    sales = models.ForeignKey(Sales, on_delete=models.PROTECT)
